@@ -1,0 +1,91 @@
+📘 1. Objective
+This document outlines the requirements for collecting, monitoring, and alerting on critical metrics for the SAP BusinessObjects (BOXI) application deployed on AWS EC2 instances. The intent is to establish a comprehensive monitoring framework that provides visibility into the health, performance, and usage of both the underlying infrastructure and the BOXI application itself. This ensures timely detection of issues, improved application reliability, and proactive system maintenance.
+🧩 2. Scope
+This document covers:
+
+EC2 host-level metrics (infrastructure)
+
+BOXI application-level metrics
+
+Report/job execution metrics
+
+Security and user access activity
+
+Log monitoring requirements
+
+Dashboarding and alerting expectations
+
+🖥️ 3. EC2 Host-Level Metrics (via CloudWatch Agent)
+
+Metric Name	Source	Collection Method	Frequency	Alert Threshold
+CPUUtilization	CloudWatch Agent	EC2/CloudWatch	1 min	> 85% for 5 mins
+Memory Utilization	CloudWatch Agent	Custom Metric	1 min	> 80% for 5 mins
+Disk Usage (%)	CloudWatch Agent	Custom Metric	5 mins	> 90%
+Disk Read/Write Ops	CloudWatch	Default	5 mins	High trend
+Network In/Out	CloudWatch	Default	5 mins	Unusual spikes
+📦 4. BOXI Application Metrics (via CMC, Logs, or Scripts)
+
+Metric Name	Component	Collection Method	Frequency	Alert Threshold
+Job Queue Length	Adaptive Job Server	Script/API	5 mins	> 50 jobs
+Report Execution Time	Web Intelligence Server	Log parsing/Audit DB	15 mins	> 5 mins/job
+Failed Scheduled Jobs	Adaptive Job Server	Script/Log Analysis	10 mins	> 3 failures/run
+Memory Usage per Service	All BO Services	OS Monitoring	5 mins	> 85%
+Number of Concurrent Users	CMS/Audit DB	SQL Query	10 mins	> 50 users
+DB Connection Failures	Connection Server	Log/Trace Monitoring	5 mins	Any
+License Usage	CMS Logs/Audit DB	Log Parsing	Daily	Near limits
+📄 5. Report-Level Monitoring (via Audit DB or Schedules)
+
+Metric Name	Collection Method	Frequency	Alert Threshold
+Report Success/Failure	Audit DB Query	15 mins	> 5 failed/hour
+Report Run Time	Audit DB / Log Parsing	15 mins	> 5 mins (avg)
+Report Schedule Delays	Audit DB / BO Schedules	30 mins	> 10 mins delay
+🔐 6. Security & Access Monitoring
+
+Metric Name	Collection Source	Frequency	Alert Threshold
+Login Failures	Audit DB / Auth Logs	10 mins	> 3 failures/user
+Inactive Accounts	Audit DB / CMS Query	Weekly	Inactive > 60 days
+Concurrent Logins	CMS Logs / Audit DB	15 mins	> 2 sessions/user
+🪵 7. Log Monitoring (BOXI Logs)
+
+Log File Name	Path	Monitoring Goal
+aps_<node>.log	<BO Install Dir>/logs/aps/	Service errors
+event.log	<BO Install Dir>/logs/	Warnings/Errors
+reporting.log	<BO Install Dir>/logs/	Job/report failures
+trace.log	<BO Install Dir>/logs/	Debug/Deep troubleshooting
+stdout.log	AppServer Logs	Tomcat/Server issues
+Use CloudWatch Logs Agent, Filebeat, or log forwarders to ship logs to monitoring platforms (e.g., ELK, CloudWatch Logs, Splunk).
+
+📊 8. Dashboards & Alerting Requirements
+Dashboards should include:
+
+System health overview (CPU, Memory, Disk, Network)
+
+Application health (Job queues, failed jobs, login trends)
+
+Report KPIs (avg report run time, success/failure rates)
+
+User activity and security audit
+
+Alerts should be configured for:
+
+High CPU/memory
+
+Job/report failures
+
+Login anomalies
+
+Disk near full
+
+Send alerts to: [Slack, Email, PagerDuty, etc.]
+
+✅ 9. Acceptance Criteria
+Metrics are collected and visible on the dashboard
+
+Alerts are triggered as per thresholds
+
+Logs are searchable and retained for X days
+
+Documentation is available for metrics and alert sources
+
+Let me know if you'd like this in a Word doc or if you want to tailor it to a specific monitoring tool (e.g., CloudWatch, Datadog, or Splunk).
+
