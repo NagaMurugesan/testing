@@ -1,1 +1,168 @@
-temp
+📘 1. Introduction
+This document outlines the design and implementation plan for automating the monthly AMI rebuild process and BOXI application installation using Terraform and a GitLab CI/CD pipeline. This process ensures consistency, patching, and streamlined deployment of the BOXI environment.
+
+🎯 2. Goals & Objectives
+Automate monthly EC2 AMI refresh.
+
+Install SAP BOXI application on top of the rebuilt AMI.
+
+Ensure all required dependencies and configurations are baked into the instance.
+
+Use GitLab CI/CD pipeline to drive the entire flow.
+
+Ensure rollback and logging are available for traceability and audit.
+
+🛠️ 3. Architecture Overview
+Components Involved:
+
+GitLab CI/CD: Orchestrates the rebuild process.
+
+Terraform: Provisions AWS infrastructure.
+
+Shell Scripts / Ansible: Handles BOXI installation and configuration.
+
+Packer (Optional): Used for AMI creation (if building custom AMIs).
+
+S3 / GitLab Artifacts: Stores logs, install packages, and configurations.
+
+CloudWatch Logs: Captures system logs for monitoring.
+
+🔁 4. Process Flow
+Trigger (manual or scheduled in GitLab):
+
+Triggered on 1st of every month or on demand.
+
+Pipeline Steps:
+
+Checkout Code
+
+Validate Terraform
+
+Build new AMI (optional via Packer or pre-created)
+
+Destroy existing BOXI EC2 instance (optional depending on lifecycle policy)
+
+Apply Terraform to create EC2 instance from new AMI
+
+Run provisioners or Ansible to install BOXI
+
+Health check validation
+
+Notify stakeholders / Post to Slack / Email
+
+Rollback Plan:
+
+Use previous AMI or instance snapshot
+
+Manual override pipeline stage for recovery
+
+🧩 5. GitLab Pipeline Design (.gitlab-ci.yml)
+yaml
+Copy
+Edit
+stages:
+  - validate
+  - build
+  - deploy
+  - install
+  - verify
+  - notify
+
+variables:
+  TF_VAR_env: "prod"
+  REGION: "us-east-1"
+
+validate:
+  stage: validate
+  script:
+    - terraform fmt -check
+    - terraform init
+    - terraform validate
+
+build_ami:
+  stage: build
+  script:
+    - ./scripts/build-ami.sh   # (uses Packer if required)
+  only:
+    - schedules
+    - manual
+
+deploy_infra:
+  stage: deploy
+  script:
+    - terraform apply -auto-approve
+  artifacts:
+    paths:
+      - terraform.tfstate
+
+install_boxi:
+  stage: install
+  script:
+    - ./scripts/install-boxi.sh  # Can call Ansible or bash
+  environment:
+    name: production
+
+verify:
+  stage: verify
+  script:
+    - curl http://$BOXI_HOST:8080/BOE/BI > /dev/null || exit 1
+
+notify:
+  stage: notify
+  script:
+    - ./scripts/notify.sh "BOXI Rebuild Completed Successfully"
+📁 6. Directory Structure
+arduino
+Copy
+Edit
+/project-root
+├── terraform/
+│   ├── main.tf
+│   └── variables.tf
+├── scripts/
+│   ├── build-ami.sh
+│   ├── install-boxi.sh
+│   └── notify.sh
+├── playbooks/ (optional)
+│   └── install_boxi.yml
+├── .gitlab-ci.yml
+└── README.md
+✅ 7. Validation & Health Check
+Confirm BOXI URL is accessible.
+
+Validate that services (CMS, APS, Job Server) are running.
+
+Check /var/log/boxi/install.log for install success.
+
+Optional: Hit report endpoint to verify rendering.
+
+📊 8. Monitoring & Logging
+CloudWatch: EC2 health metrics
+
+CloudWatch Logs / S3: System and install logs
+
+GitLab Artifacts: Pipeline logs for audit
+
+Slack / Email Notifications: Rebuild result
+
+🛡️ 9. Security Considerations
+Use IAM roles with least privilege for Terraform and EC2.
+
+Store secrets in GitLab CI/CD variables (e.g., DB credentials, license keys).
+
+Ensure AMIs are scanned for vulnerabilities monthly.
+
+📅 10. Schedule
+
+Task	Frequency
+AMI Rebuild	Monthly
+CI/CD Pipeline	Scheduled or manual
+Health Checks	Post-deployment
+Alert Review	As needed
+🔄 11. Rollback Plan
+Retain previous AMI (tag as stable)
+
+Include a manual rollback stage in the pipeline
+
+Optionally snapshot BOXI data/config before deletion
+
