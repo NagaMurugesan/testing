@@ -1,29 +1,18 @@
-# Policy allowing pull and push access to all ECR repos (or scope it to specific repos if needed)
-resource "aws_iam_policy" "ecr_access_policy" {
-  name        = "ECRPullPushPolicy"
-  description = "Allow EC2 instance to pull/push to ECR"
+# Replace with your instance ID
+INSTANCE_ID=i-xxxxxxxxxxxxxxxxx
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = "ecr:GetAuthorizationToken"
-        Resource = "*"
-      }
-    ]
-  })
-}
+# Get attached volume IDs
+VOLUME_IDS=$(aws ec2 describe-instances \
+  --instance-id $INSTANCE_ID \
+  --query "Reservations[].Instances[].BlockDeviceMappings[].Ebs.VolumeId" \
+  --output text)
+
+# Take snapshot of each volume
+for VOLUME_ID in $VOLUME_IDS; do
+  aws ec2 create-snapshot \
+    --volume-id $VOLUME_ID \
+    --description "Snapshot of volume $VOLUME_ID from instance $INSTANCE_ID"
+done
+
+
+--tag-specifications 'ResourceType=snapshot,Tags=[{Key=Name,Value=MySnapshot}]'
