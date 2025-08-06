@@ -1,73 +1,71 @@
-resource "aws_ssm_parameter" "app_config" {
-  name        = "/myapp/config/db_url"
-  description = "Database connection string"
-  type        = "SecureString" # or "String"
-  value       = "postgres://user:password@host:5432/dbname"
-  overwrite   = true
-}
-
-resource "aws_iam_role" "ec2_ssm_role" {
-  name = "ec2_ssm_parameter_access_role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_policy" "ssm_read_policy" {
-  name = "SSMReadParameterPolicy"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ssm:GetParameter",
-          "ssm:GetParameters"
-        ]
-        Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/myapp/config/*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "attach_policy" {
-  role       = aws_iam_role.ec2_ssm_role.name
-  policy_arn = aws_iam_policy.ssm_read_policy.arn
-}
-
-resource "aws_iam_instance_profile" "ec2_instance_profile" {
-  name = "ec2_ssm_instance_profile"
-  role = aws_iam_role.ec2_ssm_role.name
-}
-
-
-resource "aws_instance" "my_ec2" {
-  ami           = "ami-xxxxxxxxxxxx" # Replace with valid AMI ID
-  instance_type = "t2.micro"
-
-  iam_instance_profile = aws_iam_instance_profile.ec2_instance_profile.name
-
-  tags = {
-    Name = "EC2WithSSMAccess"
-  }
-
-  # Add user_data script if you want to run the script on boot
-}
-
-
-
 #!/bin/bash
 
-# Fetch plain string
-aws ssm get-parameter --name "/myapp/config/db_url" --with-decryption --query "Parameter.Value" --output text
+# ====== CONFIGURATION ======
+DB_HOST="your-db-endpoint.rds.amazonaws.com"
+DB_PORT=3306
+DB_NAME="your_db_name"
+DB_USER="admin"
+DB_PASSWORD="your_password"
+DUMP_FILE="/tmp/rds_backup_$(date +%Y%m%d%H%M%S).sql"
+BACKUP_DIR="/tmp/rds_backup"
+RESTORE_FILE=""  # Leave empty to use latest dump
+# ===========================
+
+# Ensure backup directory exists
+mkdir -p "$BACKUP_DIR"
+
+# Export data using mysqldump
+backup_rds() {
+  echo "Backing up database $DB_NAME from $DB_HOST..."
+  mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$DUMP_FILE"
+  if [ $? -eq 0 ]; then
+    echo "Backup successful: $DUMP_FILE"
+  else
+    echo "Backup failed."
+    exit 1
+  fi
+}
+
+# Restore data using mysql
+restore_rds() {
+  local file_to_restore="$RESTORE_FILE"
+
+  # If no file specified, use the latest .sql file
+  if [ -z "$file_to_restore" ]; then
+    file_to_restore=$(ls -t "$BACKUP_DIR"/*.sql | head -n 1)
+    echo "No restore file specified. Using latest backup: $file_to_restore"
+  fi
+
+  if [ -f "$file_to_restore" ]; then
+    echo "Restoring database $DB_NAME from $file_to_restore..."
+    mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$file_to_restore"
+    if [ $? -eq 0 ]; then
+      echo "Restore completed successfully."
+    else
+      echo "Restore failed."
+      exit 1
+    fi
+  else
+    echo "Restore file not found: $file_to_restore"
+    exit 1
+  fi
+}
+
+# Menu for actions
+echo "Choose action:"
+echo "1) Backup RDS"
+echo "2) Restore RDS"
+read -p "Enter choice [1-2]: " choice
+
+case "$choice" in
+  1)
+    backup_rds
+    ;;
+  2)
+    restore_rds
+    ;;
+  *)
+    echo "Invalid choice"
+    exit 1
+    ;;
+esac
