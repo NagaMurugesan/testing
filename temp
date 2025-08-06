@@ -3,69 +3,72 @@
 # ====== CONFIGURATION ======
 DB_HOST="your-db-endpoint.rds.amazonaws.com"
 DB_PORT=3306
-DB_NAME="your_db_name"
 DB_USER="admin"
 DB_PASSWORD="your_password"
-DUMP_FILE="/tmp/rds_backup_$(date +%Y%m%d%H%M%S).sql"
+
 BACKUP_DIR="/tmp/rds_backup"
-RESTORE_FILE=""  # Leave empty to use latest dump
+RESTORE_DIR="$BACKUP_DIR"
 # ===========================
 
-# Ensure backup directory exists
 mkdir -p "$BACKUP_DIR"
 
-# Export data using mysqldump
-backup_rds() {
-  echo "Backing up database $DB_NAME from $DB_HOST..."
-  mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$DUMP_FILE"
-  if [ $? -eq 0 ]; then
-    echo "Backup successful: $DUMP_FILE"
-  else
-    echo "Backup failed."
-    exit 1
-  fi
-}
-
-# Restore data using mysql
-restore_rds() {
-  local file_to_restore="$RESTORE_FILE"
-
-  # If no file specified, use the latest .sql file
-  if [ -z "$file_to_restore" ]; then
-    file_to_restore=$(ls -t "$BACKUP_DIR"/*.sql | head -n 1)
-    echo "No restore file specified. Using latest backup: $file_to_restore"
-  fi
-
-  if [ -f "$file_to_restore" ]; then
-    echo "Restoring database $DB_NAME from $file_to_restore..."
-    mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$file_to_restore"
+# Function to backup specified databases
+backup_dbs() {
+  for db in "$@"; do
+    DUMP_FILE="${BACKUP_DIR}/${db}_backup_$(date +%Y%m%d%H%M%S).sql"
+    echo "📦 Backing up database: $db"
+    mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$db" > "$DUMP_FILE"
     if [ $? -eq 0 ]; then
-      echo "Restore completed successfully."
+      echo "✅ Backup successful: $DUMP_FILE"
     else
-      echo "Restore failed."
-      exit 1
+      echo "❌ Backup failed for $db"
     fi
-  else
-    echo "Restore file not found: $file_to_restore"
-    exit 1
-  fi
+  done
 }
 
-# Menu for actions
-echo "Choose action:"
-echo "1) Backup RDS"
-echo "2) Restore RDS"
-read -p "Enter choice [1-2]: " choice
+# Function to restore specified databases
+restore_dbs() {
+  for db in "$@"; do
+    # Find latest backup file for this DB
+    RESTORE_FILE=$(ls -t "${RESTORE_DIR}/${db}_backup_"*.sql 2>/dev/null | head -n 1)
+    if [ -f "$RESTORE_FILE" ]; then
+      echo "♻️ Restoring database: $db from $RESTORE_FILE"
+      mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$db" < "$RESTORE_FILE"
+      if [ $? -eq 0 ]; then
+        echo "✅ Restore successful: $db"
+      else
+        echo "❌ Restore failed for $db"
+      fi
+    else
+      echo "⚠️ No backup file found for $db"
+    fi
+  done
+}
 
-case "$choice" in
-  1)
-    backup_rds
+# Function to show usage
+usage() {
+  echo "Usage: $0 [backup|restore] db1 [db2 ... dbN]"
+  echo "Example: $0 backup mydb1 mydb2"
+  exit 1
+}
+
+# ========= MAIN LOGIC =========
+
+ACTION="$1"
+shift  # Remaining args are DB names
+
+if [ -z "$ACTION" ] || [ $# -eq 0 ]; then
+  usage
+fi
+
+case "$ACTION" in
+  backup)
+    backup_dbs "$@"
     ;;
-  2)
-    restore_rds
+  restore)
+    restore_dbs "$@"
     ;;
   *)
-    echo "Invalid choice"
-    exit 1
+    usage
     ;;
 esac
