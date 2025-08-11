@@ -1,74 +1,88 @@
 #!/bin/bash
 
-# ====== CONFIGURATION ======
-DB_HOST="your-db-endpoint.rds.amazonaws.com"
-DB_PORT=3306
-DB_USER="admin"
-DB_PASSWORD="your_password"
+# ----------------------------------------
+# Script: rds_backup_restore.sh
+# Usage:
+#   ./rds_backup_restore.sh backup [db1 db2 ...]
+#   ./rds_backup_restore.sh restore [db1 db2 ...]
+# Description:
+#   Backup or restore multiple MySQL databases in Aurora RDS
+# ----------------------------------------
 
-BACKUP_DIR="/tmp/rds_backup"
-RESTORE_DIR="$BACKUP_DIR"
-# ===========================
+# RDS connection details
+RDS_HOST="your-rds-endpoint.amazonaws.com"
+RDS_USER="admin"
+RDS_PASSWORD="yourpassword"
+BACKUP_DIR="/path/to/backup"
 
-mkdir -p "$BACKUP_DIR"
+# Default databases to backup if none are passed
+DEFAULT_DATABASES=("db1" "db2" "db3")
 
-# Function to backup specified databases
-backup_dbs() {
-  for db in "$@"; do
-    DUMP_FILE="${BACKUP_DIR}/${db}_backup_$(date +%Y%m%d%H%M%S).sql"
-    echo "📦 Backing up database: $db"
-    mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$db" > "$DUMP_FILE"
-    if [ $? -eq 0 ]; then
-      echo "✅ Backup successful: $DUMP_FILE"
-    else
-      echo "❌ Backup failed for $db"
-    fi
-  done
-}
+# Check arguments
+ACTION=$1
+shift # Remove the action from the arguments list
 
-# Function to restore specified databases
-restore_dbs() {
-  for db in "$@"; do
-    # Find latest backup file for this DB
-    RESTORE_FILE=$(ls -t "${RESTORE_DIR}/${db}_backup_"*.sql 2>/dev/null | head -n 1)
-    if [ -f "$RESTORE_FILE" ]; then
-      echo "♻️ Restoring database: $db from $RESTORE_FILE"
-      mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$db" < "$RESTORE_FILE"
-      if [ $? -eq 0 ]; then
-        echo "✅ Restore successful: $db"
-      else
-        echo "❌ Restore failed for $db"
-      fi
-    else
-      echo "⚠️ No backup file found for $db"
-    fi
-  done
-}
-
-# Function to show usage
-usage() {
-  echo "Usage: $0 [backup|restore] db1 [db2 ... dbN]"
-  echo "Example: $0 backup mydb1 mydb2"
-  exit 1
-}
-
-# ========= MAIN LOGIC =========
-
-ACTION="$1"
-shift  # Remaining args are DB names
-
-if [ -z "$ACTION" ] || [ $# -eq 0 ]; then
-  usage
+# Use provided DB list or fall back to defaults
+if [ "$#" -gt 0 ]; then
+    DATABASES=("$@")
+else
+    DATABASES=("${DEFAULT_DATABASES[@]}")
 fi
 
+# Create backup directory if not exists
+mkdir -p "$BACKUP_DIR"
+
+# Function: Backup
+backup_databases() {
+    for DB in "${DATABASES[@]}"; do
+        echo "Backing up database: $DB"
+        mysqldump --single-transaction \
+                  -h "$RDS_HOST" \
+                  -u "$RDS_USER" \
+                  -p"$RDS_PASSWORD" \
+                  "$DB" > "$BACKUP_DIR/${DB}_$(date +%F_%H-%M-%S).sql"
+
+        if [ $? -eq 0 ]; then
+            echo "✅ Backup successful for $DB"
+        else
+            echo "❌ Backup failed for $DB"
+        fi
+    done
+}
+
+# Function: Restore
+restore_databases() {
+    for DB in "${DATABASES[@]}"; do
+        LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/${DB}_*.sql 2>/dev/null | head -n 1)
+        if [ -z "$LATEST_BACKUP" ]; then
+            echo "⚠️ No backup file found for $DB"
+            continue
+        fi
+
+        echo "Dropping and recreating database: $DB"
+        mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -e "DROP DATABASE IF EXISTS \`$DB\`; CREATE DATABASE \`$DB\`;"
+
+        echo "Restoring database: $DB from $LATEST_BACKUP"
+        mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" "$DB" < "$LATEST_BACKUP"
+
+        if [ $? -eq 0 ]; then
+            echo "✅ Restore successful for $DB"
+        else
+            echo "❌ Restore failed for $DB"
+        fi
+    done
+}
+
+# Main logic
 case "$ACTION" in
-  backup)
-    backup_dbs "$@"
-    ;;
-  restore)
-    restore_dbs "$@"
-    ;;
-  *)
-    usage
-    ;;
+    backup)
+        backup_databases
+        ;;
+    restore)
+        restore_databases
+        ;;
+    *)
+        echo "Usage: $0 {backup|restore} [db1 db2 ...]"
+        exit 1
+        ;;
 esac
