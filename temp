@@ -1,88 +1,180 @@
-#!/bin/bash
-
-# ----------------------------------------
-# Script: rds_backup_restore.sh
-# Usage:
-#   ./rds_backup_restore.sh backup [db1 db2 ...]
-#   ./rds_backup_restore.sh restore [db1 db2 ...]
-# Description:
-#   Backup or restore multiple MySQL databases in Aurora RDS
-# ----------------------------------------
-
-# RDS connection details
-RDS_HOST="your-rds-endpoint.amazonaws.com"
-RDS_USER="admin"
-RDS_PASSWORD="yourpassword"
-BACKUP_DIR="/path/to/backup"
-
-# Default databases to backup if none are passed
-DEFAULT_DATABASES=("db1" "db2" "db3")
-
-# Check arguments
-ACTION=$1
-shift # Remove the action from the arguments list
-
-# Use provided DB list or fall back to defaults
-if [ "$#" -gt 0 ]; then
-    DATABASES=("$@")
-else
-    DATABASES=("${DEFAULT_DATABASES[@]}")
-fi
-
-# Create backup directory if not exists
-mkdir -p "$BACKUP_DIR"
-
-# Function: Backup
-backup_databases() {
-    for DB in "${DATABASES[@]}"; do
-        echo "Backing up database: $DB"
-        mysqldump --single-transaction \
-                  -h "$RDS_HOST" \
-                  -u "$RDS_USER" \
-                  -p"$RDS_PASSWORD" \
-                  "$DB" > "$BACKUP_DIR/${DB}_$(date +%F_%H-%M-%S).sql"
-
-        if [ $? -eq 0 ]; then
-            echo "✅ Backup successful for $DB"
-        else
-            echo "❌ Backup failed for $DB"
-        fi
-    done
+terraform {
+  required_version = ">= 1.5.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = ">= 2.4"
+    }
+  }
 }
 
-# Function: Restore
-restore_databases() {
-    for DB in "${DATABASES[@]}"; do
-        LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/${DB}_*.sql 2>/dev/null | head -n 1)
-        if [ -z "$LATEST_BACKUP" ]; then
-            echo "⚠️ No backup file found for $DB"
-            continue
-        fi
-
-        echo "Dropping and recreating database: $DB"
-        mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" -e "DROP DATABASE IF EXISTS \`$DB\`; CREATE DATABASE \`$DB\`;"
-
-        echo "Restoring database: $DB from $LATEST_BACKUP"
-        mysql -h "$RDS_HOST" -u "$RDS_USER" -p"$RDS_PASSWORD" "$DB" < "$LATEST_BACKUP"
-
-        if [ $? -eq 0 ]; then
-            echo "✅ Restore successful for $DB"
-        else
-            echo "❌ Restore failed for $DB"
-        fi
-    done
+provider "aws" {
+  region = var.aws_region
 }
 
-# Main logic
-case "$ACTION" in
-    backup)
-        backup_databases
-        ;;
-    restore)
-        restore_databases
-        ;;
-    *)
-        echo "Usage: $0 {backup|restore} [db1 db2 ...]"
-        exit 1
-        ;;
-esac
+# 1) Custom EventBridge bus
+resource "aws_cloudwatch_event_bus" "this" {
+  name = var.event_bus_name
+}
+
+# 2) Lambda IAM role + policy (for logging)
+data "aws_iam_policy_document" "lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "lambda_role" {
+  name               = "${var.project_name}-lambda-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+data "aws_iam_policy_document" "lambda_logs" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "lambda_logs" {
+  name   = "${var.project_name}-lambda-logs"
+  policy = data.aws_iam_policy_document.lambda_logs.json
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_logs_attach" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_logs.arn
+}
+
+# 3) Lambda function (Python 3.12). We package inline code using archive_file.
+locals {
+  lambda_handler = <<PY
+import json
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def handler(event, context):
+    logger.info("Received EventBridge event: %s", json.dumps(event))
+    # Example: pull fields from detail
+    detail = event.get("detail", {})
+    message = detail.get("message", "no message")
+    logger.info("Detail.message = %s", message)
+    return {"status": "ok", "echo": detail}
+PY
+}
+
+resource "local_file" "lambda_py" {
+  filename = "${path.module}/lambda_handler.py"
+  content  = local.lambda_handler
+}
+
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = local_file.lambda_py.filename
+  output_path = "${path.module}/lambda.zip"
+}
+
+resource "aws_lambda_function" "this" {
+  function_name = "${var.project_name}-handler"
+  role          = aws_iam_role.lambda_role.arn
+  runtime       = "python3.12"
+  handler       = "lambda_handler.handler"
+  filename      = data.archive_file.lambda_zip.output_path
+  timeout       = 15
+  environment {
+    variables = {
+      PROJECT_NAME = var.project_name
+    }
+  }
+
+  depends_on = [aws_iam_role_policy_attachment.lambda_logs_attach]
+}
+
+# 4) EventBridge Rule filtering by source + detail-type
+resource "aws_cloudwatch_event_rule" "this" {
+  name           = "${var.project_name}-rule"
+  event_bus_name = aws_cloudwatch_event_bus.this.name
+
+  event_pattern = jsonencode({
+    "source"      : [var.event_source],
+    "detail-type" : [var.event_detail_type]
+    # Optionally match specific fields in "detail"
+    # "detail": { "env": ["dev","prod"] }
+  })
+}
+
+# 5) Target the Lambda
+resource "aws_cloudwatch_event_target" "lambda_target" {
+  rule           = aws_cloudwatch_event_rule.this.name
+  event_bus_name = aws_cloudwatch_event_bus.this.name
+  target_id      = "lambda"
+  arn            = aws_lambda_function.this.arn
+}
+
+# 6) Permission for EventBridge to invoke the Lambda
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.this.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.this.arn
+}
+
+# Useful outputs
+output "event_bus_name" {
+  value = aws_cloudwatch_event_bus.this.name
+}
+
+output "event_rule_arn" {
+  value = aws_cloudwatch_event_rule.this.arn
+}
+
+output "lambda_name" {
+  value = aws_lambda_function.this.function_name
+}
+
+
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region to deploy into"
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  type        = string
+  description = "Name prefix for resources"
+  default     = "evtbridge-demo"
+}
+
+variable "event_bus_name" {
+  type        = string
+  description = "Custom EventBridge bus name"
+  default     = "custom-demo-bus"
+}
+
+variable "event_source" {
+  type        = string
+  description = "Event source identifier used by put-events"
+  default     = "my.company.app"
+}
+
+variable "event_detail_type" {
+  type        = string
+  description = "Detail type identifier used by put-events"
+  default     = "MyApp Event"
+}
