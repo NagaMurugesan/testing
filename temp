@@ -1,35 +1,56 @@
-import boto3
-import botocore
-import os
+resource "aws_cloudwatch_event_rule" "trigger_ssm" {
+  name        = "trigger-ssm-doc"
+  description = "Trigger SSM document when EC2 instance starts"
+  event_pattern = <<EOF
+{
+  "source": ["aws.ec2"],
+  "detail-type": ["EC2 Instance State-change Notification"],
+  "detail": {
+    "state": ["running"]
+  }
+}
+EOF
+}
 
-# Set your region here: us-gov-west-1 or us-gov-east-1
-REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
+resource "aws_cloudwatch_event_target" "ssm_target" {
+  rule      = aws_cloudwatch_event_rule.trigger_ssm.name
+  target_id = "ssm-doc"
+  arn       = "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:document/MyAutomationDoc"
 
-def main():
-    try:
-        # Create IAM client explicitly for GovCloud
-        iam = boto3.client(
-            "iam",
-            region_name=REGION,
-            endpoint_url="https://iam.us-gov.amazonaws.com"
-        )
+  role_arn = aws_iam_role.eventbridge_ssm_role.arn
+}
 
-        # List the first 10 IAM roles
-        response = iam.list_roles(MaxItems=10)
-        roles = response.get("Roles", [])
+resource "aws_iam_role" "eventbridge_ssm_role" {
+  name = "eventbridge-ssm-role"
 
-        print(f"Found {len(roles)} roles:")
-        for r in roles:
-            print(f"- {r['RoleName']}")
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
 
-        print("IAM connection successful ✅")
+resource "aws_iam_role_policy" "eventbridge_ssm_policy" {
+  role = aws_iam_role.eventbridge_ssm_role.id
 
-    except botocore.exceptions.EndpointConnectionError as e:
-        print(f"Endpoint connection error: {e}")
-    except botocore.exceptions.ClientError as e:
-        print(f"Client error: {e}")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-
-if __name__ == "__main__":
-    main()
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "ssm:StartAutomationExecution",
+          "ssm:SendCommand"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
