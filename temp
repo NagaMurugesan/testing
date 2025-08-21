@@ -1,33 +1,35 @@
-import os
 import boto3
-import logging
+import botocore
+import os
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# Set your region here: us-gov-west-1 or us-gov-east-1
+REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
 
-iam = boto3.client("iam")
-
-def lambda_handler(event, context):
-    role_name = os.environ.get("ROLE_NAME")
-    policy_arn = os.environ.get("POLICY_ARN")       # for managed policy
-    inline_policy_name = os.environ.get("INLINE_POLICY_NAME")  # for inline policy
-
+def main():
     try:
-        if policy_arn:
-            # Case 1: Remove managed policy
-            logger.info(f"Detaching managed policy {policy_arn} from role {role_name}")
-            iam.detach_role_policy(RoleName=role_name, PolicyArn=policy_arn)
-            return {"status": "success", "action": "detached", "policy_arn": policy_arn}
+        # Create IAM client explicitly for GovCloud
+        iam = boto3.client(
+            "iam",
+            region_name=REGION,
+            endpoint_url="https://iam.us-gov.amazonaws.com"
+        )
 
-        elif inline_policy_name:
-            # Case 2: Remove inline policy
-            logger.info(f"Deleting inline policy {inline_policy_name} from role {role_name}")
-            iam.delete_role_policy(RoleName=role_name, PolicyName=inline_policy_name)
-            return {"status": "success", "action": "deleted", "policy_name": inline_policy_name}
+        # List the first 10 IAM roles
+        response = iam.list_roles(MaxItems=10)
+        roles = response.get("Roles", [])
 
-        else:
-            raise ValueError("You must provide either POLICY_ARN (managed) or INLINE_POLICY_NAME (inline).")
+        print(f"Found {len(roles)} roles:")
+        for r in roles:
+            print(f"- {r['RoleName']}")
 
+        print("IAM connection successful ✅")
+
+    except botocore.exceptions.EndpointConnectionError as e:
+        print(f"Endpoint connection error: {e}")
+    except botocore.exceptions.ClientError as e:
+        print(f"Client error: {e}")
     except Exception as e:
-        logger.error(f"Error removing policy: {e}")
-        raise
+        print(f"Unexpected error: {e}")
+
+if __name__ == "__main__":
+    main()
