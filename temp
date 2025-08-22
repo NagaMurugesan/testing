@@ -1,56 +1,38 @@
-resource "aws_cloudwatch_event_rule" "trigger_ssm" {
-  name        = "trigger-ssm-doc"
-  description = "Trigger SSM document when EC2 instance starts"
-  event_pattern = <<EOF
-{
-  "source": ["aws.ec2"],
-  "detail-type": ["EC2 Instance State-change Notification"],
-  "detail": {
-    "state": ["running"]
-  }
-}
-EOF
-}
+#!/bin/bash
 
-resource "aws_cloudwatch_event_target" "ssm_target" {
-  rule      = aws_cloudwatch_event_rule.trigger_ssm.name
-  target_id = "ssm-doc"
-  arn       = "arn:aws:ssm:us-east-1:<ACCOUNT_ID>:document/MyAutomationDoc"
+# Example input
+tag_files=("file1.tag" "file2.tag")
+current_node="file2.tag"
 
-  role_arn = aws_iam_role.eventbridge_ssm_role.arn
-}
+# Get last element of the list
+last_tag="${tag_files[-1]}"
 
-resource "aws_iam_role" "eventbridge_ssm_role" {
-  name = "eventbridge-ssm-role"
+echo "Last tag in list: $last_tag"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "events.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
+# Check if last_tag matches current_node
+if [[ "$last_tag" == "$current_node" ]]; then
+  echo "Match found: $last_tag == $current_node"
 
-resource "aws_iam_role_policy" "eventbridge_ssm_policy" {
-  role = aws_iam_role.eventbridge_ssm_role.id
+  # Loop until all files exist
+  while true; do
+    all_exist=true
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow",
-        Action   = [
-          "ssm:StartAutomationExecution",
-          "ssm:SendCommand"
-        ],
-        Resource = "*"
-      }
-    ]
-  })
-}
+    for f in "${tag_files[@]}"; do
+      if [[ ! -f "$f" ]]; then
+        echo "File $f not found. Waiting..."
+        all_exist=false
+        break
+      fi
+    done
+
+    if [[ "$all_exist" == true ]]; then
+      echo "✅ All files are now available!"
+      break
+    fi
+
+    # Sleep before re-checking
+    sleep 120  # sleep 2 minutes (adjust as needed)
+  done
+else
+  echo "No match: $last_tag != $current_node"
+fi
