@@ -4,6 +4,10 @@
 tag_files=("file1.tag" "file2.tag")
 current_node="file2.tag"
 
+# Convert to Bash array (strip brackets and quotes, then split by comma)
+IFS=',' read -r -a tag_array <<< "$(echo "$tag_files" | sed -e 's/[][]//g' -e 's/"//g')"
+
+
 # Get last element of the list
 last_tag="${tag_files[-1]}"
 
