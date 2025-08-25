@@ -1,277 +1,93 @@
-# Create an EBS volume
-resource "aws_ebs_volume" "infa" {
-  availability_zone = aws_instance.ec2.availability_zone
-  size              = 10 # Size in GiB
-  tags = {
-    Name = "ExampleVolume"
-  }
-}
+# module "aws_postgresql" {
+#   source               = "git::https://gitlab.com/silambam/common.git//postgresql"
+#   db_instance_class    = "db.t3.micro"  # Adjust as needed
+#   db_name              = "datacontrol"
+#   db_username          = "admin"
+#   db_password          = "secretFremont@098mnb"
+#   db_allocated_storage = 20              # Adjust as needed
+#   vpc_security_group_ids = ["sg-09c9d048191d36cf3"]
+#   db_subnet_group_name = "subnet-0ff2d98b2634d8d24"
+#   engine_version       = "15.4"
+# }
 
-# Attach the EBS volume to the EC2 instance
-resource "aws_volume_attachment" "example" {
-  device_name  = "/dev/xvdf"              # Replace with the desired device name
-  instance_id  = aws_instance.ec2.id
-  volume_id    = aws_ebs_volume.infa.id
-  force_detach = false                    # Set to true to detach volume forcibly
-}
-
-main
+# psql -h recondb.c1ook6syy5hn.us-east-2.rds.amazonaws.com -p 5432 -U nikita -d recondb
 
 
-# Create IAM Role and Attach SSM Policy
-resource "aws_iam_role" "ssm_role" {
-  name = "SSM-Role"
+locals {
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        },
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
+  postgres_identifier    = "recondb"
+  postgres_name          = "datacontrol"
+  postgres_user_name     = "nikita"
+  postgres_user_password = "secretAthaman098mnb"
+  postgres_instance_name = "datacontrol"
+  postgres_db_password   = "Pettaiasdf"
+  postgres_port          = 5432
 
-resource "aws_iam_role_policy_attachment" "ssm_managed_policy" {
-  role       = aws_iam_role.ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-# Instance Profile for EC2
-resource "aws_iam_instance_profile" "ssm_instance_profile" {
-  name = "SSM-Instance-Profile"
-  role = aws_iam_role.ssm_role.name
 }
 
 
-resource "aws_instance" "ec2" {
-  ami           = var.ami_id
-  instance_type = var.instance_type
-  key_name      = var.key_name
-  subnet_id     = var.subnet_id
-  iam_instance_profile = aws_iam_instance_profile.ssm_instance_profile.name
+# # provider "postgresql" {
+# #   host            = aws_db_instance.postgres.address
+# #   port            = local.postgres_port
+# #   database        = local.postgres_database_name
+# #   username        = local.postgres_username
+# #   password        = local.postgres_password
+# #   sslmode         = "require"
+# #   connect_timeout = 15
+# #   superuser       = false
+# # }
 
-  tags = merge(
-    {
-      "Name" = var.instance_name
-    },
-    var.tags
-  )
+// POSTGRES
+# resource "aws_security_group" "security_group_name" {
+#   name = "security_group_name"
 
-  vpc_security_group_ids = var.security_group_ids
+#   ingress {
+#     from_port   = local.postgres_port
+#     to_port     = local.postgres_port
+#     protocol    = "tcp"
+#     description = "PostgreSQL"
+#     cidr_blocks = ["0.0.0.0/0"] // >
+#   }
 
-  user_data = <<-EOT
-            sudo yum update -y
-            sudo yum install -y https://s3.us-east-2.amazonaws.com/amazon-ssm-us-east-2/latest/linux_amd64/amazon-ssm-agent.rpm
-            sudo systemctl start amazon-ssm-agent
-            sudo systemctl enable amazon-ssm-agent
-
-            echo "User data script execution completed"
-EOT
-
-  root_block_device {
-    volume_size = var.volume_size
-    volume_type = var.volume_type
-  }
-}
-
-
-variable "region" {
-  description = "AWS region where the EC2 instance will be created"
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "ami_id" {
-  description = "AMI ID for the EC2 instance"
-  type        = string
-}
-
-variable "instance_type" {
-  description = "Type of EC2 instance (e.g., t2.micro, t3.large)"
-  type        = string
-  default     = "t2.micro"
-}
-
-variable "key_name" {
-  description = "Key pair name to access the EC2 instance"
-  type        = string
-  default     = null
-}
-
-variable "subnet_id" {
-  description = "Subnet ID where the EC2 instance will be deployed"
-  type        = string
-}
-
-variable "security_group_ids" {
-  description = "List of security group IDs to attach to the EC2 instance"
-  type        = list(string)
-  default     = []
-}
-
-variable "instance_name" {
-  description = "Name tag for the EC2 instance"
-  type        = string
-  default     = "Terraform-EC2"
-}
-
-variable "tags" {
-  description = "Additional tags to add to the EC2 instance"
-  type        = map(string)
-  default     = {}
-}
-
-variable "user_data" {
-  description = "User data script to configure the EC2 instance"
-  type        = string
-  default     = ""
-}
-
-variable "volume_size" {
-  description = "Size of the root volume in GB"
-  type        = number
-  default     = 10
-}
-
-variable "volume_type" {
-  description = "Type of the root volume (e.g., gp2, gp3)"
-  type        = string
-  default     = "gp2"
-}
-
-variable "vpc_id" {
-  description = "ID of the VPC where endpoints will be created"
-  type        = string
-}
-
-variable "subnet_ids" {
-  description = "List of subnet IDs to associate with the endpoints"
-  type        = list(string)
-}
-
-sudo yum install -y amazon-ssm-agent
-sudo systemctl restart amazon-ssm-agent
-
-sudo yum update -y
-sudo yum install -y https://s3.us-east-2.amazonaws.com/amazon-ssm-us-east-2/latest/linux_amd64/amazon-ssm-agent.rpm
-sudo systemctl start amazon-ssm-agent
-sudo systemctl enable amazon-ssm-agent
-
-#Mount the ebs volume
-
-#Format and Mount the Volume
-
-sudo mkfs -t ext4 /dev/xvdf
-sudo mkdir /mnt/data
-sudo mount /dev/xvdf /mnt/data
-
-#Persist the Mount Point: Add an entry to /etc/fstab to ensure the volume is mounted automatically after a reboot:
-echo '/dev/xvdf /mnt/data ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
-
-
-end point
-
-
-
-# Create Security Group for Endpoints
-resource "aws_security_group" "vpc_endpoint_sg" {
-  name        = "vpc-endpoint-sg"
-  description = "Security group for VPC endpoints"
-  vpc_id      = var.vpc_id
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "vpc-endpoint-sg"
-  }
-}
-
-# Create SSM Endpoint
-resource "aws_vpc_endpoint" "ssm" {
-  vpc_id            = var.vpc_id
-  service_name      = "com.amazonaws.${var.region}.ssm"
-  vpc_endpoint_type = "Interface"
-  subnet_ids        = var.subnet_ids
-  security_group_ids = [aws_security_group.vpc_endpoint_sg.id]
-
-  private_dns_enabled = true
-
-  tags = {
-    Name = "SSM Endpoint"
-  }
-}
-
-# Create EC2 Messages Endpoint
-resource "aws_vpc_endpoint" "ec2messages" {
-  vpc_id            = var.vpc_id
-  service_name      = "com.amazonaws.${var.region}.ec2messages"
-  vpc_endpoint_type = "Interface"
-  subnet_ids        = var.subnet_ids
-  security_group_ids = [aws_security_group.vpc_endpoint_sg.id]
-
-  private_dns_enabled = true
-
-  tags = {
-    Name = "EC2 Messages Endpoint"
-  }
-}
-
-# Create SSM Messages Endpoint
-resource "aws_vpc_endpoint" "ssmmessages" {
-  vpc_id            = var.vpc_id
-  service_name      = "com.amazonaws.${var.region}.ssmmessages"
-  vpc_endpoint_type = "Interface"
-  subnet_ids        = var.subnet_ids
-  security_group_ids = [aws_security_group.vpc_endpoint_sg.id]
-
-  private_dns_enabled = true
-
-  tags = {
-    Name = "SSM Messages Endpoint"
-  }
-}
-
-
-output "vpc_endpoints" {
-  description = "Details of the created VPC endpoints"
-  value = {
-    ssm          = aws_vpc_endpoint.ssm.id
-    ec2messages  = aws_vpc_endpoint.ec2messages.id
-    ssmmessages  = aws_vpc_endpoint.ssmmessages.id
-  }
-}
-
-
-# module "ec2_instance" {
-#   source            = "./ec2_instance"
-#   vpc_id            ="vpc-018872ae25c7f7351"
-#   subnet_ids         =["subnet-0ff2d98b2634d8d24","subnet-0eec8bb4d7094dd2c","subnet-090011c44bb7734d8"]
-#   region            = "us-east-2"
-#   ami_id            = "ami-002acc74c401fa86b" # Replace with your AMI ID
-#   instance_type     = "t2.micro"
-#   key_name          = "ec2-key-pair"
-#   subnet_id         = "subnet-0ff2d98b2634d8d24"
-#   security_group_ids = ["sg-09c9d048191d36cf3"]
-#   instance_name     = "infa-instance"
-#   tags = {
-#     "Environment" = "Dev"
-#     "Project"     = "Terraform-Module"
+#   ingress {
+#     from_port        = local.postgres_port
+#     to_port          = local.postgres_port
+#     protocol         = "tcp"
+#     description      = "PostgreSQL"
+#     ipv6_cidr_blocks = ["::/0"] // >
 #   }
 # }
+
+# resource "aws_db_instance" "instance_name" {
+#   allocated_storage      = 20
+#   storage_type           = "gp2"
+#   engine                 = "postgres"
+#   engine_version         = "15.7"
+#   instance_class         = "db.t3.micro"
+#   identifier             = local.postgres_identifier
+#   db_name                = local.postgres_instance_name
+#   username               = local.postgres_user_name
+#   password               = local.postgres_db_password
+#   publicly_accessible    = true
+#   #parameter_group_name   = "default.postgres12"
+#   vpc_security_group_ids = ["sg-09c9d048191d36cf3"] #[aws_security_group.security_group_name.id] # ["sg-09c9d048191d36cf3"]
+#   skip_final_snapshot    = true
+# }
+
+# resource "postgresql_role" "user_name" {
+#   name                = local.postgres_user_name
+#   login               = true
+#   password            = local.postgres_user_password
+#   encrypted_password  = true
+#   create_database     = true
+#   create_role         = true
+#   skip_reassign_owned = true
+# }
+
+
+# psql --host=recondb.c1ook6syy5hn.us-east-2.rds.amazonaws.com --port=5432 --username=nikita --dbname=datacontrol
+
+# CREATE USER iam_user WITH LOGIN;
+
+# GRANT rds_iam TO iam_user;
+
