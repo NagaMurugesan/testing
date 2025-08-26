@@ -91,3 +91,5 @@ locals {
 
 # GRANT rds_iam TO iam_user;
 
+https://medium.com/the-ai-forum/understanding-the-mcp-workflow-building-a-local-mcp-client-using-ollama-and-langchain-mcp-5997b8a5fded
+
