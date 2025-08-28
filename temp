@@ -109,3 +109,5 @@ CHUNK_SIZE=1024
 CHUNK_OVERLAP=128
 TOP_K=4
 
+https://github.com/awslabs/amazon-bedrock-agent-samples/tree/main/src/InlineAgent#amazon-bedrock-inline-agent-vs-amazon-bedrock-agent
+
