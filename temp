@@ -99,3 +99,13 @@ https://github.com/NagaMurugesan/ollama.git
 git remote add origin https://github.com/NagaMurugesan/ollama.git
 git branch -M main
 git push -u origin main
+
+# Local LLM + embedding config (all via Ollama)
+LLM_MODEL=llama3
+EMBED_MODEL=nomic-embed-text   # or 'mxbai-embed-large' (both available via Ollama)
+OLLAMA_BASE_URL=http://localhost:11434
+SYSTEM_PROMPT=You are a concise agronomy assistant specializing in pistachio growing. Answer with factual, actionable guidance and cite the provided sources when relevant.
+CHUNK_SIZE=1024
+CHUNK_OVERLAP=128
+TOP_K=4
+
