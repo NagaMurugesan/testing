@@ -1,113 +1,59 @@
-# module "aws_postgresql" {
-#   source               = "git::https://gitlab.com/silambam/common.git//postgresql"
-#   db_instance_class    = "db.t3.micro"  # Adjust as needed
-#   db_name              = "datacontrol"
-#   db_username          = "admin"
-#   db_password          = "secretFremont@098mnb"
-#   db_allocated_storage = 20              # Adjust as needed
-#   vpc_security_group_ids = ["sg-09c9d048191d36cf3"]
-#   db_subnet_group_name = "subnet-0ff2d98b2634d8d24"
-#   engine_version       = "15.4"
-# }
+#!/bin/bash
 
-# psql -h recondb.c1ook6syy5hn.us-east-2.rds.amazonaws.com -p 5432 -U nikita -d recondb
+# ---------------------------
+# Variables
+# ---------------------------
+VOLUME1="/dev/xvdf"        # /dev/sdf maps to /dev/xvdf in Amazon Linux 2
+VOLUME2="/dev/xvdh"        # /dev/sdh maps to /dev/xvdh
+MOUNT_POINT1="/mnt/data1"
+MOUNT_POINT2="/mnt/data2"
+FILESYSTEM_TYPE="ext4"
 
+# ---------------------------
+# Update package manager and install required tools
+# ---------------------------
+sudo yum update -y
+sudo yum install -y file
 
-locals {
+# ---------------------------
+# Create mount points
+# ---------------------------
+sudo mkdir -p $MOUNT_POINT1
+sudo mkdir -p $MOUNT_POINT2
 
-  postgres_identifier    = "recondb"
-  postgres_name          = "datacontrol"
-  postgres_user_name     = "nikita"
-  postgres_user_password = "secretAthaman098mnb"
-  postgres_instance_name = "datacontrol"
-  postgres_db_password   = "Pettaiasdf"
-  postgres_port          = 5432
+# ---------------------------
+# Format volumes if they are not already formatted
+# ---------------------------
+if ! sudo file -s $VOLUME1 | grep -q 'filesystem'; then
+    sudo mkfs -t $FILESYSTEM_TYPE $VOLUME1
+fi
 
-}
+if ! sudo file -s $VOLUME2 | grep -q 'filesystem'; then
+    sudo mkfs -t $FILESYSTEM_TYPE $VOLUME2
+fi
 
+# ---------------------------
+# Mount the volumes
+# ---------------------------
+sudo mount $VOLUME1 $MOUNT_POINT1
+sudo mount $VOLUME2 $MOUNT_POINT2
 
-# # provider "postgresql" {
-# #   host            = aws_db_instance.postgres.address
-# #   port            = local.postgres_port
-# #   database        = local.postgres_database_name
-# #   username        = local.postgres_username
-# #   password        = local.postgres_password
-# #   sslmode         = "require"
-# #   connect_timeout = 15
-# #   superuser       = false
-# # }
+# ---------------------------
+# Backup fstab before editing
+# ---------------------------
+sudo cp /etc/fstab /etc/fstab.bak
 
-// POSTGRES
-# resource "aws_security_group" "security_group_name" {
-#   name = "security_group_name"
+# ---------------------------
+# Get UUIDs and add to fstab for persistence
+# ---------------------------
+UUID1=$(sudo blkid -s UUID -o value $VOLUME1)
+UUID2=$(sudo blkid -s UUID -o value $VOLUME2)
 
-#   ingress {
-#     from_port   = local.postgres_port
-#     to_port     = local.postgres_port
-#     protocol    = "tcp"
-#     description = "PostgreSQL"
-#     cidr_blocks = ["0.0.0.0/0"] // >
-#   }
+# Add entries to /etc/fstab if not already present
+grep -q "$UUID1" /etc/fstab || echo "UUID=$UUID1 $MOUNT_POINT1 $FILESYSTEM_TYPE defaults,nofail 0 2" | sudo tee -a /etc/fstab
+grep -q "$UUID2" /etc/fstab || echo "UUID=$UUID2 $MOUNT_POINT2 $FILESYSTEM_TYPE defaults,nofail 0 2" | sudo tee -a /etc/fstab
 
-#   ingress {
-#     from_port        = local.postgres_port
-#     to_port          = local.postgres_port
-#     protocol         = "tcp"
-#     description      = "PostgreSQL"
-#     ipv6_cidr_blocks = ["::/0"] // >
-#   }
-# }
-
-# resource "aws_db_instance" "instance_name" {
-#   allocated_storage      = 20
-#   storage_type           = "gp2"
-#   engine                 = "postgres"
-#   engine_version         = "15.7"
-#   instance_class         = "db.t3.micro"
-#   identifier             = local.postgres_identifier
-#   db_name                = local.postgres_instance_name
-#   username               = local.postgres_user_name
-#   password               = local.postgres_db_password
-#   publicly_accessible    = true
-#   #parameter_group_name   = "default.postgres12"
-#   vpc_security_group_ids = ["sg-09c9d048191d36cf3"] #[aws_security_group.security_group_name.id] # ["sg-09c9d048191d36cf3"]
-#   skip_final_snapshot    = true
-# }
-
-# resource "postgresql_role" "user_name" {
-#   name                = local.postgres_user_name
-#   login               = true
-#   password            = local.postgres_user_password
-#   encrypted_password  = true
-#   create_database     = true
-#   create_role         = true
-#   skip_reassign_owned = true
-# }
-
-
-# psql --host=recondb.c1ook6syy5hn.us-east-2.rds.amazonaws.com --port=5432 --username=nikita --dbname=datacontrol
-
-# CREATE USER iam_user WITH LOGIN;
-
-# GRANT rds_iam TO iam_user;
-
-https://medium.com/the-ai-forum/understanding-the-mcp-workflow-building-a-local-mcp-client-using-ollama-and-langchain-mcp-5997b8a5fded
-
-https://github.com/NagaMurugesan/ollama.git
-
-
-git remote add origin https://github.com/NagaMurugesan/ollama.git
-git branch -M main
-git push -u origin main
-
-# Local LLM + embedding config (all via Ollama)
-LLM_MODEL=llama3
-EMBED_MODEL=nomic-embed-text   # or 'mxbai-embed-large' (both available via Ollama)
-OLLAMA_BASE_URL=http://localhost:11434
-SYSTEM_PROMPT=You are a concise agronomy assistant specializing in pistachio growing. Answer with factual, actionable guidance and cite the provided sources when relevant.
-CHUNK_SIZE=1024
-CHUNK_OVERLAP=128
-TOP_K=4
-
-https://github.com/awslabs/amazon-bedrock-agent-samples/tree/main/src/InlineAgent#amazon-bedrock-inline-agent-vs-amazon-bedrock-agent
-
+# ---------------------------
+# Verify mounts
+# ---------------------------
+df -h
