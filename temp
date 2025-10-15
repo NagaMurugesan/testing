@@ -57,3 +57,76 @@ grep -q "$UUID2" /etc/fstab || echo "UUID=$UUID2 $MOUNT_POINT2 $FILESYSTEM_TYPE 
 # Verify mounts
 # ---------------------------
 df -h
+
+
+
+alternate
+
+#!/bin/bash
+# --------------------------------------------
+# Script: auto_mount_ebs.sh
+# Purpose: Automatically mount all attached EBS volumes (except root)
+# Works on: Amazon Linux 2 / RHEL / Ubuntu
+# --------------------------------------------
+
+set -e
+
+# Update packages and install dependencies
+sudo yum install -y file util-linux
+
+echo "🔍 Detecting attached EBS volumes..."
+
+# Get list of block devices excluding the root volume
+# Root device is typically /dev/xvda or /dev/nvme0n1
+BLOCK_DEVICES=$(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print $1}' | grep -vE 'xvda|nvme0n1')
+
+if [ -z "$BLOCK_DEVICES" ]; then
+  echo "❌ No extra EBS volumes detected."
+  exit 0
+fi
+
+echo "✅ Found volumes: $BLOCK_DEVICES"
+
+MOUNT_BASE="/mnt"
+FILESYSTEM_TYPE="ext4"
+COUNT=1
+
+for DEV in $BLOCK_DEVICES; do
+  DEVICE_PATH="/dev/$DEV"
+  MOUNT_POINT="$MOUNT_BASE/volume$COUNT"
+
+  echo "----------------------------------------"
+  echo "🔧 Processing $DEVICE_PATH"
+  echo "📁 Mount point: $MOUNT_POINT"
+
+  # Create mount directory
+  sudo mkdir -p $MOUNT_POINT
+
+  # Check if device already has a filesystem
+  if sudo file -s $DEVICE_PATH | grep -q 'filesystem'; then
+    echo "🟢 $DEVICE_PATH already has a filesystem. Skipping format."
+  else
+    echo "⚙️ Formatting $DEVICE_PATH as $FILESYSTEM_TYPE"
+    sudo mkfs -t $FILESYSTEM_TYPE $DEVICE_PATH
+  fi
+
+  # Mount the volume
+  echo "📦 Mounting $DEVICE_PATH to $MOUNT_POINT"
+  sudo mount $DEVICE_PATH $MOUNT_POINT
+
+  # Get UUID for persistent mounting
+  UUID=$(sudo blkid -s UUID -o value $DEVICE_PATH)
+
+  # Add to /etc/fstab if not already present
+  if ! grep -q "$UUID" /etc/fstab; then
+    echo "📝 Adding $MOUNT_POINT to /etc/fstab"
+    echo "UUID=$UUID $MOUNT_POINT $FILESYSTEM_TYPE defaults,nofail 0 2" | sudo tee -a /etc/fstab
+  fi
+
+  ((COUNT++))
+done
+
+echo "✅ All volumes have been mounted successfully."
+echo "----------------------------------------"
+df -h | grep "$MOUNT_BASE"
+
