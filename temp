@@ -1,132 +1,184 @@
-#!/bin/bash
+###############################################################################
+# VARIABLES
+###############################################################################
+variable "region" {
+  default = "us-west-2"
+}
 
-# ---------------------------
-# Variables
-# ---------------------------
-VOLUME1="/dev/xvdf"        # /dev/sdf maps to /dev/xvdf in Amazon Linux 2
-VOLUME2="/dev/xvdh"        # /dev/sdh maps to /dev/xvdh
-MOUNT_POINT1="/mnt/data1"
-MOUNT_POINT2="/mnt/data2"
-FILESYSTEM_TYPE="ext4"
+variable "ami_name" {
+  default = "custom-ami"
+}
 
-# ---------------------------
-# Update package manager and install required tools
-# ---------------------------
-sudo yum update -y
-sudo yum install -y file
+variable "ami_version" {
+  default = "1.0.0"
+}
 
-# ---------------------------
-# Create mount points
-# ---------------------------
-sudo mkdir -p $MOUNT_POINT1
-sudo mkdir -p $MOUNT_POINT2
+###############################################################################
+# PROVIDER
+###############################################################################
+provider "aws" {
+  region = var.region
+}
 
-# ---------------------------
-# Format volumes if they are not already formatted
-# ---------------------------
-if ! sudo file -s $VOLUME1 | grep -q 'filesystem'; then
-    sudo mkfs -t $FILESYSTEM_TYPE $VOLUME1
-fi
+###############################################################################
+# IAM ROLE FOR IMAGE BUILDER
+###############################################################################
+resource "aws_iam_role" "imagebuilder_role" {
+  name = "imagebuilder-service-role"
 
-if ! sudo file -s $VOLUME2 | grep -q 'filesystem'; then
-    sudo mkfs -t $FILESYSTEM_TYPE $VOLUME2
-fi
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "imagebuilder.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
 
-# ---------------------------
-# Mount the volumes
-# ---------------------------
-sudo mount $VOLUME1 $MOUNT_POINT1
-sudo mount $VOLUME2 $MOUNT_POINT2
+resource "aws_iam_role_policy_attachment" "imagebuilder_policy_attach" {
+  role       = aws_iam_role.imagebuilder_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSImageBuilderFullAccess"
+}
 
-# ---------------------------
-# Backup fstab before editing
-# ---------------------------
-sudo cp /etc/fstab /etc/fstab.bak
+###############################################################################
+# IMAGE BUILDER COMPONENT - CUSTOM INSTALL SCRIPT
+###############################################################################
+resource "aws_imagebuilder_component" "custom_software" {
+  name    = "custom-software-install"
+  version = "1.0.0"
+  platform = "Linux"
+  description = "Installs custom software packages"
 
-# ---------------------------
-# Get UUIDs and add to fstab for persistence
-# ---------------------------
-UUID1=$(sudo blkid -s UUID -o value $VOLUME1)
-UUID2=$(sudo blkid -s UUID -o value $VOLUME2)
+  data = <<-EOT
+  name: CustomSoftwareInstall
+  description: Installs Docker, Git, and Python3
+  schemaVersion: 1.0
+  phases:
+    - name: build
+      steps:
+        - name: InstallPackages
+          action: ExecuteBash
+          inputs:
+            commands:
+              - sudo yum update -y
+              - sudo yum install -y docker git python3
+              - sudo systemctl enable docker
+              - sudo systemctl start docker
+              - echo "Custom software installation complete!"
+  EOT
+}
 
-# Add entries to /etc/fstab if not already present
-grep -q "$UUID1" /etc/fstab || echo "UUID=$UUID1 $MOUNT_POINT1 $FILESYSTEM_TYPE defaults,nofail 0 2" | sudo tee -a /etc/fstab
-grep -q "$UUID2" /etc/fstab || echo "UUID=$UUID2 $MOUNT_POINT2 $FILESYSTEM_TYPE defaults,nofail 0 2" | sudo tee -a /etc/fstab
+###############################################################################
+# BASE IMAGE - Amazon Linux 2023
+###############################################################################
+data "aws_ssm_parameter" "amazon_linux_2023" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
 
-# ---------------------------
-# Verify mounts
-# ---------------------------
-df -h
+###############################################################################
+# IMAGE RECIPE
+###############################################################################
+resource "aws_imagebuilder_image_recipe" "custom_recipe" {
+  name         = "${var.ami_name}-recipe"
+  version      = var.ami_version
+  parent_image = data.aws_ssm_parameter.amazon_linux_2023.value
 
+  component {
+    component_arn = aws_imagebuilder_component.custom_software.arn
+  }
 
+  block_device_mapping {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size = 20
+      volume_type = "gp3"
+      delete_on_termination = true
+    }
+  }
+}
 
-alternate
+###############################################################################
+# INFRASTRUCTURE CONFIGURATION
+###############################################################################
+resource "aws_imagebuilder_infrastructure_configuration" "infra_config" {
+  name = "${var.ami_name}-infra-config"
 
-#!/bin/bash
-# --------------------------------------------
-# Script: auto_mount_ebs.sh
-# Purpose: Automatically mount all attached EBS volumes (except root)
-# Works on: Amazon Linux 2 / RHEL / Ubuntu
-# --------------------------------------------
+  instance_types = ["t3.micro"]
+  terminate_instance_on_failure = true
+  instance_profile_name = aws_iam_instance_profile.imagebuilder_instance_profile.name
 
-set -e
+  security_group_ids = [aws_security_group.imagebuilder_sg.id]
+  subnet_id          = aws_subnet.imagebuilder_subnet.id
+}
 
-# Update packages and install dependencies
-sudo yum install -y file util-linux
+###############################################################################
+# NETWORKING (MINIMAL VPC SETUP)
+###############################################################################
+resource "aws_vpc" "imagebuilder_vpc" {
+  cidr_block = "10.0.0.0/16"
+}
 
-echo "🔍 Detecting attached EBS volumes..."
+resource "aws_subnet" "imagebuilder_subnet" {
+  vpc_id                  = aws_vpc.imagebuilder_vpc.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "${var.region}a"
+  map_public_ip_on_launch = true
+}
 
-# Get list of block devices excluding the root volume
-# Root device is typically /dev/xvda or /dev/nvme0n1
-BLOCK_DEVICES=$(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print $1}' | grep -vE 'xvda|nvme0n1')
+resource "aws_security_group" "imagebuilder_sg" {
+  vpc_id = aws_vpc.imagebuilder_vpc.id
+  name   = "imagebuilder-sg"
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
 
-if [ -z "$BLOCK_DEVICES" ]; then
-  echo "❌ No extra EBS volumes detected."
-  exit 0
-fi
+###############################################################################
+# DISTRIBUTION CONFIGURATION (OPTIONAL: PUBLISH TO MULTIPLE REGIONS)
+###############################################################################
+resource "aws_imagebuilder_distribution_configuration" "dist_config" {
+  name = "${var.ami_name}-dist-config"
 
-echo "✅ Found volumes: $BLOCK_DEVICES"
+  distribution {
+    region = var.region
+    ami_distribution_configuration {
+      name = "${var.ami_name}-${var.ami_version}-{{ imagebuilder:buildDate }}"
+      description = "Custom AMI built using Image Builder-{{ imagebuilder:buildDate }}"
+      target_account_ids = [] # Add other AWS account IDs to share AMI
+    }
+  }
+}
 
-MOUNT_BASE="/mnt"
-FILESYSTEM_TYPE="ext4"
-COUNT=1
+###############################################################################
+# IMAGE PIPELINE
+###############################################################################
+resource "aws_imagebuilder_image_pipeline" "custom_pipeline" {
+  name                             = "${var.ami_name}-pipeline"
+  description                      = "Pipeline to build custom AMI"
+  image_recipe_arn                 = aws_imagebuilder_image_recipe.custom_recipe.arn
+  infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.infra_config.arn
+  distribution_configuration_arn   = aws_imagebuilder_distribution_configuration.dist_config.arn
+  status                           = "ENABLED"
 
-for DEV in $BLOCK_DEVICES; do
-  DEVICE_PATH="/dev/$DEV"
-  MOUNT_POINT="$MOUNT_BASE/volume$COUNT"
+  schedule {
+    schedule_expression = "cron(0 6 * * ? *)" # Daily 6 AM UTC build (optional)
+    pipeline_execution_start_condition = "EXPRESSION_MATCH_ONLY"
+  }
+}
 
-  echo "----------------------------------------"
-  echo "🔧 Processing $DEVICE_PATH"
-  echo "📁 Mount point: $MOUNT_POINT"
+###############################################################################
+# OUTPUTS
+###############################################################################
+output "imagebuilder_pipeline_name" {
+  value = aws_imagebuilder_image_pipeline.custom_pipeline.name
+}
 
-  # Create mount directory
-  sudo mkdir -p $MOUNT_POINT
-
-  # Check if device already has a filesystem
-  if sudo file -s $DEVICE_PATH | grep -q 'filesystem'; then
-    echo "🟢 $DEVICE_PATH already has a filesystem. Skipping format."
-  else
-    echo "⚙️ Formatting $DEVICE_PATH as $FILESYSTEM_TYPE"
-    sudo mkfs -t $FILESYSTEM_TYPE $DEVICE_PATH
-  fi
-
-  # Mount the volume
-  echo "📦 Mounting $DEVICE_PATH to $MOUNT_POINT"
-  sudo mount $DEVICE_PATH $MOUNT_POINT
-
-  # Get UUID for persistent mounting
-  UUID=$(sudo blkid -s UUID -o value $DEVICE_PATH)
-
-  # Add to /etc/fstab if not already present
-  if ! grep -q "$UUID" /etc/fstab; then
-    echo "📝 Adding $MOUNT_POINT to /etc/fstab"
-    echo "UUID=$UUID $MOUNT_POINT $FILESYSTEM_TYPE defaults,nofail 0 2" | sudo tee -a /etc/fstab
-  fi
-
-  ((COUNT++))
-done
-
-echo "✅ All volumes have been mounted successfully."
-echo "----------------------------------------"
-df -h | grep "$MOUNT_BASE"
-
+output "imagebuilder_recipe_arn" {
+  value = aws_imagebuilder_image_recipe.custom_recipe.arn
+}
