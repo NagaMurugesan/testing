@@ -229,3 +229,25 @@ resource "aws_iam_instance_profile" "imagebuilder_instance_profile" {
   Resource = "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/${aws:InstanceId}"
     
 
+
+sudo yum install -y \
+    libX11 \
+    libXcomposite \
+    libXcursor \
+    libXdamage \
+    libXext \
+    libXi \
+    libXtst \
+    cups-libs \
+    libXScrnSaver \
+    libXrandr \
+    GConf2 \
+    alsa-lib \
+    atk \
+    pango \
+    gtk3 \
+    libdrm \
+    libgbm \
+    nss \
+    xdg-utils
+
