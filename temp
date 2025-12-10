@@ -1,14 +1,450 @@
+Nice — I’ll give you a complete, ready-to-deploy solution that:
+
+checks 5 Linux processes every 2 minutes on a Red Hat EC2 instance,
+
+publishes a CloudWatch custom metric per process (1 = running, 0 = down),
+
+creates CloudWatch Alarms that fire if a process is down for 4 minutes (2 consecutive datapoints), and
+
+shows how to surface/alert on those metrics from Grafana (CloudWatch datasource + dashboard + alerting example).
+
+I’ll include:
+
+IAM policy you should attach to the EC2 instance role (recommended best practice: use an instance profile).
+
+Terraform snippets (optional) to create the IAM role and CloudWatch Alarm (so you can automate infra).
+
+A Python monitoring script (boto3) that publishes per-process metrics.
+
+A systemd timer + service to run the script every 2 minutes.
+
+CloudWatch alarm CLI/CloudFormation/Terraform example.
+
+Grafana: datasource + dashboard JSON snippet and instructions to create alerts in Grafana (and a recommended approach — use CloudWatch alarms for reliability, Grafana for visualization/notification routing).
+
+1) IAM policy for the EC2 instance role
+
+Create an IAM role attached to the EC2 instance with a policy like this (minimum permissions to publish metrics and manage alarms if you want the instance to create alarms — otherwise create alarms from CI/Terraform):
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudWatchPutMetric",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OptionalAlarmManage",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DeleteAlarms"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OptionalLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+
+
+Recommendation: Attach this policy to a role that is assigned to the EC2 instance (Instance Profile). Do not embed AWS keys on the instance.
+
+2) Python monitoring script (checks processes and publishes CloudWatch metrics)
+
+Save as /opt/process-monitor/process_monitor.py.
+
+#!/usr/bin/env python3
+"""
+process_monitor.py
+- Monitors a list of process names.
+- Publishes CloudWatch custom metric ProcessStatus (1=up, 0=down) per process.
+- Each run publishes one data point per process (period will match your CloudWatch alarm period).
+"""
+
+import subprocess
 import boto3
-import os
+import time
+import logging
+from datetime import datetime
 
-cloudwatch = boto3.client('cloudwatch', region_name=os.environ['REGION'])
+# CONFIG: list the 5 process names (as they'd appear in `ps -ef` output)
+PROCESS_NAMES = [
+    "my_app_1",
+    "my_app_2",
+    "my_app_3",
+    "my_app_4",
+    "my_app_5"
+]
 
-def lambda_handler(event, context):
-    cloudwatch.put_metric_data(
-        Namespace=os.environ['NAMESPACE'],
-        MetricData=[{
-            'MetricName': os.environ['METRIC_NAME'],
-            'Value': 1,
-            'Unit': 'Count'
-        }]
-    )
+# CloudWatch namespace + metric name
+NAMESPACE = "Custom/ProcessMonitor"
+METRIC_NAME = "ProcessStatus"  # dimension ProcessName will separate metrics
+
+# Region detection: uses instance IMDS role if running on EC2 (boto3 default)
+CW = boto3.client("cloudwatch")
+
+logging.basicConfig(
+    filename="/var/log/process-monitor.log",
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+
+def is_process_running(name):
+    """
+    Return True if `name` appears in process list (ps -ef).
+    Use pgrep -f for simplicity and matching command line.
+    """
+    try:
+        # pgrep exit code 0 if any matching pid
+        r = subprocess.run(["pgrep", "-f", name], stdout=subprocess.DEVNULL)
+        return r.returncode == 0
+    except Exception as e:
+        logging.exception("Error checking process %s: %s", name, e)
+        return False
+
+def publish_metric(process_name, value):
+    """
+    Publish a single datum with dimension ProcessName=<process_name>
+    """
+    timestamp = datetime.utcnow()
+    try:
+        resp = CW.put_metric_data(
+            Namespace=NAMESPACE,
+            MetricData=[
+                {
+                    "MetricName": METRIC_NAME,
+                    "Dimensions": [
+                        {"Name": "ProcessName", "Value": process_name}
+                    ],
+                    "Timestamp": timestamp,
+                    "Value": value,
+                    "Unit": "Count"
+                }
+            ]
+        )
+        logging.info("Published metric %s=%s for %s", METRIC_NAME, value, process_name)
+    except Exception as e:
+        logging.exception("Failed publishing metric for %s: %s", process_name, e)
+
+def main():
+    for pname in PROCESS_NAMES:
+        up = is_process_running(pname)
+        publish_metric(pname, 1 if up else 0)
+    logging.info("Run complete.")
+
+if __name__ == "__main__":
+    main()
+
+
+Make script executable:
+
+sudo mkdir -p /opt/process-monitor
+sudo chown ec2-user:ec2-user /opt/process-monitor
+# copy process_monitor.py to /opt/process-monitor and:
+sudo chmod +x /opt/process-monitor/process_monitor.py
+
+
+Install dependencies (on RHEL / CentOS / Amazon Linux 2):
+
+sudo yum install -y python3
+python3 -m pip install --upgrade pip
+python3 -m pip install boto3
+# ensure pgrep (procps) is available (usually it is). If not:
+sudo yum install -y procps-ng
+
+
+Important: The process-match string in PROCESS_NAMES must be chosen carefully. pgrep -f matches the full command line — use exact unique strings (ex: jar names, service names) to avoid false matches.
+
+3) Run every 2 minutes — systemd timer + service (recommended over cron for reliability)
+
+Create systemd service /etc/systemd/system/process-monitor.service:
+
+[Unit]
+Description=Process Monitor - publish process metrics to CloudWatch
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/process-monitor/process_monitor.py
+
+
+Create systemd timer /etc/systemd/system/process-monitor.timer:
+
+[Unit]
+Description=Run process-monitor every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+
+
+Enable & start:
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now process-monitor.timer
+sudo systemctl status process-monitor.timer
+# check logs:
+sudo journalctl -u process-monitor.service -n 200
+
+
+This runs the script roughly every 2 minutes. Each run publishes a metric per process.
+
+4) CloudWatch alarm — trigger when a process is down for 4 minutes
+
+Principle: metric value = 0 when down. Alarm will check metric for 2 data points (each 2-minute period) and fire if both are 0.
+
+You can create CloudWatch alarms by CLI, CloudFormation, or Terraform. Example CLI:
+
+Replace <PROCESS_NAME> and <ALARM_NAME> accordingly.
+
+aws cloudwatch put-metric-alarm \
+  --alarm-name "ProcessDown-<PROCESS_NAME>" \
+  --alarm-description "Alarm when process <PROCESS_NAME> is down for 4 minutes" \
+  --metric-name "ProcessStatus" \
+  --namespace "Custom/ProcessMonitor" \
+  --statistic "Average" \
+  --dimensions Name=ProcessName,Value="<PROCESS_NAME>" \
+  --period 120 \
+  --evaluation-periods 2 \
+  --threshold 0.5 \
+  --comparison-operator "LessThanOrEqualToThreshold" \
+  --alarm-actions "<SNS_TOPIC_ARN>" \
+  --ok-actions "<SNS_TOPIC_ARN_IF_DESIRED>" \
+  --unit "Count"
+
+
+Explanation:
+
+period 120 — datapoint every 2 minutes.
+
+evaluation-periods 2 — require 2 consecutive datapoints below threshold (so ~4 minutes down).
+
+threshold 0.5 and LessThanOrEqualToThreshold turns 1 → OK, 0 → alarms.
+
+alarm-actions — connect SNS topic to send emails, webhook, or to integrate with PagerDuty, OpsGenie, etc.
+
+If you prefer Terraform or CloudFormation, I can provide those too — let me know. (I include a short Terraform sample below.)
+
+5) Terraform snippet (IAM role + instance profile + optional alarm)
+
+Minimal example to create IAM role & policy and instance profile:
+
+# provider must be configured externally
+resource "aws_iam_role" "ec2_process_monitor" {
+  name = "ec2_process_monitor_role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
+}
+
+data "aws_iam_policy_document" "ec2_assume_role" {
+  statement {
+    effect = "Allow"
+    principals {
+      type = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_policy" "process_monitor_policy" {
+  name        = "ProcessMonitorPolicy"
+  description = "Allow put metric data"
+  policy      = file("${path.module}/process_monitor_policy.json") # write policy json (from earlier) here
+}
+
+resource "aws_iam_role_policy_attachment" "attach_policy" {
+  role       = aws_iam_role.ec2_process_monitor.name
+  policy_arn = aws_iam_policy.process_monitor_policy.arn
+}
+
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "ec2_process_monitor_instance_profile"
+  role = aws_iam_role.ec2_process_monitor.name
+}
+
+
+Terraform for CloudWatch alarm (one example for a process):
+
+resource "aws_cloudwatch_metric_alarm" "process_down" {
+  alarm_name          = "ProcessDown-my_app_1"
+  alarm_description   = "Alarm if my_app_1 is down for 4 minutes"
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = 2
+  metric_name         = "ProcessStatus"
+  namespace           = "Custom/ProcessMonitor"
+  period              = 120
+  statistic           = "Average"
+  threshold           = 0.5
+  dimensions = {
+    ProcessName = "my_app_1"
+  }
+  alarm_actions = [aws_sns_topic.notify.arn] # define SNS topic elsewhere
+}
+
+6) Grafana: visualize & alert
+Option A — Recommended approach
+
+Use CloudWatch Alarms for reliable alerting (they’re built for it). Then in Grafana you:
+
+Add CloudWatch as a datasource (AWS credentials or assume role).
+
+Visualize the Custom/ProcessMonitor metric with dimension ProcessName.
+
+Use the CloudWatch alarm for notifications / paging. Grafana can also read alarms as annotations.
+
+Option B — Grafana alerting (query CloudWatch metric directly)
+
+If you want Grafana-native alerts, create metric queries to CloudWatch: query the ProcessStatus metric for each process and create an alert rule that fires if the metric averages below 0.5 over the last 4 minutes.
+
+Steps in Grafana (v8+ alerting):
+
+Add CloudWatch datasource: Configure credentials/assume-role and region.
+
+Create a new dashboard -> panel -> Query:
+
+Namespace: Custom/ProcessMonitor
+
+Metric name: ProcessStatus
+
+Dimension: ProcessName = my_app_1
+
+Period: 2m
+
+In the panel, create an alert rule:
+
+Condition: WHEN avg() OF query(A, 2m, now) IS BELOW 0.5
+
+For: 4m (or set evaluation to require 2 evaluation cycles)
+
+Configure notifications (Slack, email, webhook via Grafana contact point).
+
+Note: Grafana alert evaluation cadence depends on Grafana server settings. CloudWatch Alarms are generally more reliable for on-call notifications.
+
+7) Example Grafana dashboard JSON (single panel per process) — minimal
+
+Below is a small dashboard JSON you can import into Grafana (replace datasource UID and adjust if needed). It shows one stat panel per process. You can import it into Grafana → Create → Import → paste JSON.
+
+{
+  "dashboard": {
+    "title": "Process Monitor - Custom/ProcessMonitor",
+    "panels": [
+      {
+        "type": "stat",
+        "title": "my_app_1 status",
+        "id": 1,
+        "datasource": {
+          "type": "cloudwatch",
+          "uid": "CLOUDWATCH_DS_UID"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "region": "us-west-2",
+            "namespace": "Custom/ProcessMonitor",
+            "metricName": "ProcessStatus",
+            "dimensions": {
+              "ProcessName": "my_app_1"
+            },
+            "statistics": ["Average"],
+            "period": 120
+          }
+        ],
+        "options": {
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": ["lastNotNull"],
+            "values": false
+          }
+        }
+      }
+      /* Duplicate panels for other processes with different id/title/dimensions */
+    ]
+  }
+}
+
+8) Notification & Alert flow suggestions
+
+Critical alerts: Use CloudWatch Alarm -> SNS -> PagerDuty/Slack/email. CloudWatch alarms are reliable and integrated with AWS.
+
+Grafana: Best for visualization and secondary alerting or for teams that centralize alerting in Grafana. If you use Grafana for alerts, ensure Grafana server is highly available and alerting notification channels are configured.
+
+Silencing & dedup: If multiple processes fail from the same cause (system down), create a higher-level alarm or use runbook automation.
+
+9) Full deploy checklist (step-by-step)
+
+Prepare the EC2 instance AMI (RHEL):
+
+Ensure instance has an Instance Profile with the IAM role containing PutMetricData permissions.
+
+Install python3 & boto3 (see commands earlier).
+
+Place the Python script at /opt/process-monitor/process_monitor.py, make executable.
+
+Create systemd service & timer files (see section).
+
+Add the 5 monitored process names in PROCESS_NAMES list.
+
+Start and verify systemctl status process-monitor.timer and logs in /var/log/process-monitor.log.
+
+Create SNS topic and subscribe your email/pager.
+
+Create a CloudWatch alarm per process (CLI/Terraform) that triggers after 2 consecutive datapoints of 0 (i.e., 4 minutes).
+
+Add CloudWatch datasource in Grafana and import the dashboard JSON.
+
+Create Grafana alerts (optional) pointing to the CloudWatch metric queries, or rely on CloudWatch alarms and use Grafana only for dashboards.
+
+Test: stop one process and confirm metric changes to 0, CloudWatch alarm enters ALARM state after ~4 minutes, alert delivered via SNS.
+
+10) Testing tips
+
+To simulate a process down, stop the process or temporarily change PROCESS_NAMES to a string not present.
+
+Query CloudWatch metrics from CLI to verify data published:
+
+aws cloudwatch get-metric-statistics \
+  --namespace "Custom/ProcessMonitor" \
+  --metric-name "ProcessStatus" \
+  --dimensions Name=ProcessName,Value="my_app_1" \
+  --start-time $(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --period 120 \
+  --statistics Average \
+  --region us-west-2
+
+
+(Adjust region and times.)
+
+11) Additional improvements & considerations
+
+Use pid files or systemd service names for more deterministic checks (systemctl is-active myservice) if your processes are managed via systemd.
+
+Add metrics for process restarts/exit codes if you want richer observability.
+
+Add retries & exponential backoff if PutMetricData fails temporarily.
+
+Rate-limits: CloudWatch supports high cardinality but keep number of unique metric-dimension combos reasonable. Five processes is fine.
+
+Security: Use instance profile role (no long-term credentials). Restrict IAM policy further to only required resources if possible.
+
+Logging: Rotate /var/log/process-monitor.log using logrotate.
