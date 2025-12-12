@@ -448,3 +448,8 @@ Rate-limits: CloudWatch supports high cardinality but keep number of unique metr
 Security: Use instance profile role (no long-term credentials). Restrict IAM policy further to only required resources if possible.
 
 Logging: Rotate /var/log/process-monitor.log using logrotate.
+
+
+Certified Data Science professional (UC Berkeley) and experienced AI Engineer with a strong background in cloud-native machine learning, data engineering, and GenAI platform development. Skilled in designing and deploying scalable ML solutions across AWS SageMaker, AWS Bedrock, and GCP Vertex AI, including end-to-end model training, evaluation, orchestration, and production deployment.
+
+Proficient in building enterprise-grade AI and LLM platforms, integrating conversational agents with data pipelines, and operationalizing models with robust MLOps practices. Experienced in developing high-volume data pipelines, automating cloud infrastructure using Terraform, and optimizing costs and performance across cloud environments. Passionate about applying AI to solve real-world business problems, enhance decision-making, and drive measurable impact.
