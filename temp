@@ -18,6 +18,11 @@ mkdir -p $DOCKER_CONFIG
 curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o $DOCKER_CONFIG/docker-compose
 chmod +x $DOCKER_CONFIG/docker-compose
 
+# Install Docker Buildx (Required for 'docker compose build')
+# AL2023 'docker' package might miss this or have an old version.
+curl -SL https://github.com/docker/buildx/releases/download/v0.11.2/buildx-v0.11.2.linux-amd64 -o $DOCKER_CONFIG/docker-buildx
+chmod +x $DOCKER_CONFIG/docker-buildx
+
 # 3. Nvidia Container Toolkit
 # Configure the repository for Amazon Linux 2023 (RHEL compatible)
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | \
