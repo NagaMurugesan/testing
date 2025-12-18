@@ -76,3 +76,23 @@ sleep 10
 ollama pull mistral
 
 echo "Deployment Complete"
+
+# ... existing code ...
+
+# Create systemd directory for Docker
+mkdir -p /etc/systemd/system/docker.service.d
+
+# Write the proxy configuration
+# Notice 169.254.169.254 is just listed in the NO_PROXY line
+cat <<EOF > /etc/systemd/system/docker.service.d/http-proxy.conf
+[Service]
+Environment="HTTP_PROXY=http://your-proxy-url:port/"
+Environment="HTTPS_PROXY=http://your-proxy-url:port/"
+Environment="NO_PROXY=localhost,127.0.0.1,169.254.169.254,host.docker.internal"
+EOF
+
+# Restart Docker to pick up changes
+systemctl daemon-reload
+systemctl restart docker
+
+# ... continue with docker commands ...
