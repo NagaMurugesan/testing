@@ -1,47 +1,108 @@
-#!/bin/bash
-# File: scripts/setup-letsencrypt.sh
-
-set -e
-
-DOMAIN="chat.example.com"
-EMAIL="admin@example.com"
-
-echo "Installing Certbot..."
-sudo dnf install -y certbot
-
-echo "Stopping nginx-proxy to free port 80..."
-docker compose stop nginx-proxy
-
-echo "Generating Let's Encrypt certificate for $DOMAIN..."
-sudo certbot certonly \
-  --standalone \
-  --non-interactive \
-  --agree-tos \
-  --email $EMAIL \
-  -d $DOMAIN
-
-echo "Copying certificates to app directory..."
-sudo mkdir -p certs
-sudo cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem certs/
-sudo cp /etc/letsencrypt/live/$DOMAIN/privkey.pem certs/
-sudo chmod 644 certs/*.pem
-
-echo "Updating .env.production with certificate paths..."
-cat > .env.production << EOF
-ENVIRONMENT=production
-DOMAIN=$DOMAIN
-API_URL=https://$DOMAIN/api
-FRONTEND_URL=https://$DOMAIN
-SSL_CERT_PATH=/etc/nginx/certs/fullchain.pem
-SSL_KEY_PATH=/etc/nginx/certs/privkey.pem
-EOF
-
-echo "Starting services..."
-docker compose --env-file .env.production up -d
-
-echo "✅ Let's Encrypt certificate installed successfully!"
-echo "Certificate will auto-renew via cron job"
-
-# Setup auto-renewal
-echo "Setting up auto-renewal..."
-sudo crontab -l 2>/dev/null | { cat; echo "0 0 * * * certbot renew --quiet && cp /etc/letsencrypt/live/$DOMAIN/*.pem /home/ec2-user/app/certs/ && docker compose restart nginx-proxy"; } | sudo crontab -
+<powershell>
+# =============================================================================
+# EC2 User Data Script for Installing Python and Playwright
+# =============================================================================
+# 1. Logging Configuration
+# -----------------------------------------------------------------------------
+$LogFile = "C:\UserDataLog.txt"
+function Write-Log {
+    Param ([string]$Message)
+    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $LogEntry = "$Timestamp - $Message"
+    Add-Content -Path $LogFile -Value $LogEntry
+    Write-Output $LogEntry
+}
+Write-Log "Starting User Data Script Execution..."
+# 2. Proxy Configuration (Update these values)
+# -----------------------------------------------------------------------------
+# REPLACE THESE VALUES WITH YOUR ACTUAL PROXY DETAILS
+$ProxyHost = "http://your-proxy-address"
+$ProxyPort = "8080"
+$ProxyUrl = "$ProxyHost`:$ProxyPort" 
+# Set Environment Variables for the current process (affects subsequent commands)
+[System.Environment]::SetEnvironmentVariable("HTTP_PROXY", $ProxyUrl, [System.EnvironmentVariableTarget]::Machine)
+[System.Environment]::SetEnvironmentVariable("HTTPS_PROXY", $ProxyUrl, [System.EnvironmentVariableTarget]::Machine)
+$env:HTTP_PROXY = $ProxyUrl
+$env:HTTPS_PROXY = $ProxyUrl
+Write-Log "Proxy environment variables set to $ProxyUrl"
+# Configure global proxy for .NET WebClient (used by Invoke-WebRequest)
+$Wcl = New-Object System.Net.WebClient
+$Wcl.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+# 3. Install Python
+# -----------------------------------------------------------------------------
+$PythonVersion = "3.11.4"
+$PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
+$InstallerPath = "$env:TEMP\python-installer.exe"
+Write-Log "Downloading Python $PythonVersion from $PythonInstallerUrl..."
+try {
+    # Download Python Installer using the proxy-aware web client logic
+    # Invoke-WebRequest uses the proxy settings defined in IE/WinINET or env vars in ps 7+
+    # For PS 5.1 (default on Windows Server), we explicitly set proxy if needed or rely on netsh winhttp
+    
+    Invoke-WebRequest -Uri $PythonInstallerUrl -OutFile $InstallerPath -Proxy $ProxyUrl -ProxyUseDefaultCredentials
+    Write-Log "Download complete."
+}
+catch {
+    Write-Log "Error downloading Python: $_"
+    Exit 1
+}
+Write-Log "Installing Python..."
+try {
+    # Install Python silently
+    # /quiet: Silent install
+    # InstallAllUsers=1: Install for all users
+    # PrependPath=1: Add python to PATH
+    # Include_test=0: Don't install test suite to save space
+    Start-Process -FilePath $InstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait -NoNewWindow
+    Write-Log "Python installation completed."
+}
+catch {
+    Write-Log "Error installing Python: $_"
+    Exit 1
+}
+# Refresh Environment Variables to recognize 'python' and 'pip'
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+Write-Log "PATH refreshed."
+# Verify Python Installation
+try {
+    $ver = python --version 2>&1
+    Write-Log "Python version verified: $ver"
+}
+catch {
+    Write-Log "Command 'python' not found after reload. Checking default paths..."
+    # Fallback add to path manually for this session if automatic refresh didn't catch it immediately
+    $env:Path += ";C:\Program Files\Python311\Scripts;C:\Program Files\Python311"
+}
+# 4. Install Playwright and Browsers
+# -----------------------------------------------------------------------------
+Write-Log "Installing Playwright pip package..."
+try {
+    # Pip will respect HTTP_PROXY/HTTPS_PROXY env vars
+    pip install playwright --proxy $ProxyUrl
+    Write-Log "Playwright package installed."
+}
+catch {
+    Write-Log "Error installing Playwright package: $_"
+    Exit 1
+}
+Write-Log "Installing Playwright browsers..."
+try {
+    # Playwright install usually downloads binaries. It should respect the proxy env vars.
+    playwright install
+    Write-Log "Playwright browsers installed successfully."
+}
+catch {
+    Write-Log "Error installing Playwright browsers: $_"
+    # Sometimes playwright executable isn't found immediately. Try python -m
+    try {
+        Write-Log "Retrying with 'python -m playwright install'..."
+        python -m playwright install
+        Write-Log "Playwright browsers installed via module."
+    }
+    catch {
+        Write-Log "Failed to install browsers: $_"
+        Exit 1
+    }
+}
+Write-Log "User Data Script Execution Finished Successfully."
+</powershell>
