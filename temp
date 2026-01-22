@@ -1,125 +1,41 @@
+#!/bin/bash
 # =============================================================================
-# EC2 User Data Script for Installing Python and Playwright
+# Install Google Chrome on RHEL/CentOS/Fedora
 # =============================================================================
-# 1. Logging Configuration
-# -----------------------------------------------------------------------------
-$LogFile = "C:\UserDataLog.txt"
-function Write-Log {
-    Param ([string]$Message)
-    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $LogEntry = "$Timestamp - $Message"
-    Add-Content -Path $LogFile -Value $LogEntry
-    Write-Output $LogEntry
+# This script adds the official Google repository and installs Google Chrome Stable.
+# It automatically handles dependencies via DNF/YUM.
+set -e # Exit immediately if a command exits with a non-zero status
+# Function to log messages
+log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
 }
-Write-Log "Starting User Data Script Execution..."
-# 2. Proxy Configuration (Update these values)
-# -----------------------------------------------------------------------------
-# REPLACE THESE VALUES WITH YOUR ACTUAL PROXY DETAILS
-$ProxyHost = "http://your-proxy-address"
-$ProxyPort = "8080"
-$ProxyUrl = "$ProxyHost`:$ProxyPort" 
-# Set Environment Variables for the current process (affects subsequent commands)
-[System.Environment]::SetEnvironmentVariable("HTTP_PROXY", $ProxyUrl, [System.EnvironmentVariableTarget]::Machine)
-[System.Environment]::SetEnvironmentVariable("HTTPS_PROXY", $ProxyUrl, [System.EnvironmentVariableTarget]::Machine)
-$env:HTTP_PROXY = $ProxyUrl
-$env:HTTPS_PROXY = $ProxyUrl
-Write-Log "Proxy environment variables set to $ProxyUrl"
-# Configure global proxy for .NET WebClient (used by Invoke-WebRequest)
-$Wcl = New-Object System.Net.WebClient
-$Wcl.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
-# 3. Install Python
-# -----------------------------------------------------------------------------
-$PythonVersion = "3.11.4"
-$PythonInstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
-$InstallerPath = "$env:TEMP\python-installer.exe"
-Write-Log "Downloading Python $PythonVersion from $PythonInstallerUrl..."
-try {
-    # Download Python Installer using the proxy-aware web client logic
-    # Invoke-WebRequest uses the proxy settings defined in IE/WinINET or env vars in ps 7+
-    # For PS 5.1 (default on Windows Server), we explicitly set proxy if needed or rely on netsh winhttp
-    
-    Invoke-WebRequest -Uri $PythonInstallerUrl -OutFile $InstallerPath -Proxy $ProxyUrl -ProxyUseDefaultCredentials
-    Write-Log "Download complete."
-}
-catch {
-    Write-Log "Error downloading Python: $_"
-    Exit 1
-}
-Write-Log "Installing Python..."
-try {
-    # Install Python silently
-    # /quiet: Silent install
-    # InstallAllUsers=1: Install for all users
-    # PrependPath=1: Add python to PATH
-    # Include_test=0: Don't install test suite to save space
-    Start-Process -FilePath $InstallerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait -NoNewWindow
-    Write-Log "Python installation completed."
-}
-catch {
-    Write-Log "Error installing Python: $_"
-    Exit 1
-}
-# Refresh Environment Variables to recognize 'python' and 'pip'
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-Write-Log "PATH refreshed."
-# Verify Python Installation
-try {
-    $ver = python --version 2>&1
-    Write-Log "Python version verified: $ver"
-}
-catch {
-    Write-Log "Command 'python' not found after reload. Checking default paths..."
-    # Fallback add to path manually for this session if automatic refresh didn't catch it immediately
-    $env:Path += ";C:\Program Files\Python311\Scripts;C:\Program Files\Python311"
-}
-# 4. Install Playwright and Browsers (Shared Location)
-# -----------------------------------------------------------------------------
-Write-Log "Configuring Playwright details..."
-# Create a shared directory for browsers so they persist and are accessible to all users
-$SharedBrowserPath = "C:\playwright_browsers"
-if (-not (Test-Path -Path $SharedBrowserPath)) {
-    New-Item -ItemType Directory -Path $SharedBrowserPath -Force
-    Write-Log "Created shared browser directory at $SharedBrowserPath"
-}
-# Set the Environment Variable GLOBALLY so all users find the browsers there
-[System.Environment]::SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", $SharedBrowserPath, [System.EnvironmentVariableTarget]::Machine)
-$env:PLAYWRIGHT_BROWSERS_PATH = $SharedBrowserPath
-Write-Log "PLAYWRIGHT_BROWSERS_PATH set to $SharedBrowserPath"
-Write-Log "Installing Playwright pip package..."
-try {
-    # Pip will respect HTTP_PROXY/HTTPS_PROXY env vars
-    pip install playwright --proxy $ProxyUrl
-    Write-Log "Playwright package installed."
-}
-catch {
-    Write-Log "Error installing Playwright package: $_"
-    Exit 1
-}
-Write-Log "Installing Playwright browsers to shared location..."
-try {
-    # Playwright install uses the PLAYWRIGHT_BROWSERS_PATH env var we just set
-    playwright install
-    Write-Log "Playwright browsers installed successfully to $SharedBrowserPath."
-}
-catch {
-    Write-Log "Error installing Playwright browsers: $_"
-    # Sometimes playwright executable isn't found immediately. Try python -m
-    try {
-        Write-Log "Retrying with 'python -m playwright install'..."
-        python -m playwright install
-        Write-Log "Playwright browsers installed via module."
-    }
-    catch {
-        Write-Log "Failed to install browsers: $_"
-        Exit 1
-    }
-}
-Write-Log "User Data Script Execution Finished Successfully."
-
-
-from playwright.sync_api import sync_playwright
-
-with sync_playwright() as p:
-    browser = p.chromium.launch()
-    print("Chromium launched successfully!")
-    browser.close()
+log "Starting Google Chrome Installation..."
+# 1. Add Google Chrome Repository
+# -----------------------------
+log "Adding Google Chrome Yum Repository..."
+cat <<EOF | sudo tee /etc/yum.repos.d/google-chrome.repo
+[google-chrome]
+name=google-chrome
+baseurl=http://dl.google.com/linux/chrome/rpm/stable/x86_64
+enabled=1
+gpgcheck=1
+gpgkey=https://dl.google.com/linux/linux_signing_key.pub
+EOF
+# 2. Install Google Chrome
+# -----------------------------
+log "Installing Google Chrome Stable..."
+# -y assumes 'yes' to prompts
+sudo dnf install google-chrome-stable -y
+# 3. Verify Installation
+# -----------------------------
+log "Verifying installation..."
+CHROME_VERSION=$(google-chrome --version)
+log "Success! Installed: $CHROME_VERSION"
+# 4. Optional: Usage Instructions
+# -----------------------------
+echo ""
+echo "====================================================================="
+echo "Installation Complete."
+echo "To run Chrome in headless mode:"
+echo "  google-chrome --headless --disable-gpu --dump-dom https://google.com"
+echo "====================================================================="
