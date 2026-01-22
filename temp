@@ -1,4 +1,3 @@
-<powershell>
 # =============================================================================
 # EC2 User Data Script for Installing Python and Playwright
 # =============================================================================
@@ -73,8 +72,19 @@ catch {
     # Fallback add to path manually for this session if automatic refresh didn't catch it immediately
     $env:Path += ";C:\Program Files\Python311\Scripts;C:\Program Files\Python311"
 }
-# 4. Install Playwright and Browsers
+# 4. Install Playwright and Browsers (Shared Location)
 # -----------------------------------------------------------------------------
+Write-Log "Configuring Playwright details..."
+# Create a shared directory for browsers so they persist and are accessible to all users
+$SharedBrowserPath = "C:\playwright_browsers"
+if (-not (Test-Path -Path $SharedBrowserPath)) {
+    New-Item -ItemType Directory -Path $SharedBrowserPath -Force
+    Write-Log "Created shared browser directory at $SharedBrowserPath"
+}
+# Set the Environment Variable GLOBALLY so all users find the browsers there
+[System.Environment]::SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", $SharedBrowserPath, [System.EnvironmentVariableTarget]::Machine)
+$env:PLAYWRIGHT_BROWSERS_PATH = $SharedBrowserPath
+Write-Log "PLAYWRIGHT_BROWSERS_PATH set to $SharedBrowserPath"
 Write-Log "Installing Playwright pip package..."
 try {
     # Pip will respect HTTP_PROXY/HTTPS_PROXY env vars
@@ -85,11 +95,11 @@ catch {
     Write-Log "Error installing Playwright package: $_"
     Exit 1
 }
-Write-Log "Installing Playwright browsers..."
+Write-Log "Installing Playwright browsers to shared location..."
 try {
-    # Playwright install usually downloads binaries. It should respect the proxy env vars.
+    # Playwright install uses the PLAYWRIGHT_BROWSERS_PATH env var we just set
     playwright install
-    Write-Log "Playwright browsers installed successfully."
+    Write-Log "Playwright browsers installed successfully to $SharedBrowserPath."
 }
 catch {
     Write-Log "Error installing Playwright browsers: $_"
@@ -105,4 +115,3 @@ catch {
     }
 }
 Write-Log "User Data Script Execution Finished Successfully."
-</powershell>
