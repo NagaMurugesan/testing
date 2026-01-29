@@ -1,41 +1,19 @@
-#!/bin/bash
-# =============================================================================
-# Install Google Chrome on RHEL/CentOS/Fedora
-# =============================================================================
-# This script adds the official Google repository and installs Google Chrome Stable.
-# It automatically handles dependencies via DNF/YUM.
-set -e # Exit immediately if a command exits with a non-zero status
-# Function to log messages
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
-}
-log "Starting Google Chrome Installation..."
-# 1. Add Google Chrome Repository
-# -----------------------------
-log "Adding Google Chrome Yum Repository..."
-cat <<EOF | sudo tee /etc/yum.repos.d/google-chrome.repo
-[google-chrome]
-name=google-chrome
-baseurl=http://dl.google.com/linux/chrome/rpm/stable/x86_64
-enabled=1
-gpgcheck=1
-gpgkey=https://dl.google.com/linux/linux_signing_key.pub
-EOF
-# 2. Install Google Chrome
-# -----------------------------
-log "Installing Google Chrome Stable..."
-# -y assumes 'yes' to prompts
-sudo dnf install google-chrome-stable -y
-# 3. Verify Installation
-# -----------------------------
-log "Verifying installation..."
-CHROME_VERSION=$(google-chrome --version)
-log "Success! Installed: $CHROME_VERSION"
-# 4. Optional: Usage Instructions
-# -----------------------------
-echo ""
-echo "====================================================================="
-echo "Installation Complete."
-echo "To run Chrome in headless mode:"
-echo "  google-chrome --headless --disable-gpu --dump-dom https://google.com"
-echo "====================================================================="
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - AWS_REGION=us-east-1
+      # Ensure you pass AWS credentials when running this compose file or have them in ~/.aws/credentials mounted
+    volumes:
+      - ./backend:/app # Optional: for hot reloading if you run uvicorn with --reload
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
