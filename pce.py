@@ -24,7 +24,7 @@ headline = df[df["key"] == "YoY_pce_headline"].sort_values("date")
 core = df[df["key"] == "YoY_pce_core"].sort_values("date")
 
 # ── Colour palette (matched to the reference image) ───────────────────
-COLOR_HEADLINE = "#1F3864"      # dark navy blue
+COLOR_HEADLINE = "#2B5C8A"      # steel / medium-dark blue (matches reference)
 COLOR_CORE = "#7B8B2E"          # olive / dark yellow-green
 COLOR_RECESSION = "#D9D9D9"     # light grey recession shading
 COLOR_TARGET = "#000000"        # black dashed 2 % target line
@@ -35,7 +35,7 @@ fig.patch.set_facecolor("white")
 ax.set_facecolor("white")
 
 # Line widths matched to the reference image (~2.5 pt)
-LINE_WIDTH = 2.5
+LINE_WIDTH = 3
 
 # Plot the two series
 ax.plot(headline["date"], headline["value"], color=COLOR_HEADLINE,
@@ -46,28 +46,31 @@ ax.plot(core["date"], core["value"], color=COLOR_CORE,
 # ── 2 % target line (dashed) ─────────────────────────────────────────
 ax.axhline(y=2.0, color=COLOR_TARGET, linewidth=1.2, linestyle="--", zorder=2)
 
-# ── Recession bar (approx. Feb 2020 – Apr 2020) ──────────────────────
-rec_start = datetime(2020, 2, 1)
-rec_end = datetime(2020, 4, 30)
+# ── Recession bar (narrow strip matching reference) ───────────────────
+rec_start = datetime(2020, 3, 1)
+rec_end = datetime(2020, 4, 1)
 ax.axvspan(rec_start, rec_end, color=COLOR_RECESSION, alpha=0.9, zorder=1)
 
 # ── Y-axis formatting ────────────────────────────────────────────────
 ax.set_ylim(0, 8)
 ax.yaxis.set_major_locator(mticker.MultipleLocator(1))
 ax.yaxis.set_major_formatter(mticker.PercentFormatter(decimals=0))
-ax.tick_params(axis="y", labelsize=13, length=0)
+ax.tick_params(axis="y", labelsize=13, length=6, width=1, direction="out", color="#333333")
 
 # ── X-axis formatting ────────────────────────────────────────────────
-ax.set_xlim(datetime(2019, 1, 1), datetime(2026, 1, 1))
+ax.set_xlim(datetime(2018, 10, 1), datetime(2026, 1, 1))
 ax.xaxis.set_major_locator(mdates.YearLocator())
 ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-ax.tick_params(axis="x", labelsize=13, length=0)
+ax.tick_params(axis="x", labelsize=13, length=6, width=1, direction="out", color="#333333")
 
 # ── Grid & spines ────────────────────────────────────────────────────
-ax.grid(axis="y", color="#E0E0E0", linewidth=0.6, zorder=0)
-ax.grid(axis="x", visible=False)
-for spine in ax.spines.values():
-    spine.set_visible(False)
+ax.grid(visible=False)
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.spines["bottom"].set_visible(True)
+ax.spines["left"].set_visible(True)
+ax.spines["bottom"].set_color("#333333")
+ax.spines["left"].set_color("#333333")
 
 # ── Inline series labels (positioned where the reference shows them) ─
 ax.text(datetime(2021, 1, 1), 5.55, "Headline",
